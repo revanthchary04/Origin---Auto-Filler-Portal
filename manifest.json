@@ -1,0 +1,84 @@
+{
+  "manifest_version": 3,
+  "name": "OriginFill",
+  "version": "1.0.0",
+  "description": "Auto-fill Workday job applications instantly. Recover lost data after session timeouts. Never lose a job application form again.",
+  "author": "CharyWorld",
+  "icons": {
+    "16": "assets/icons/icon16.png",
+    "32": "assets/icons/icon32.png",
+    "48": "assets/icons/icon48.png",
+    "128": "assets/icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "assets/icons/icon16.png",
+      "32": "assets/icons/icon32.png",
+      "48": "assets/icons/icon48.png"
+    },
+    "default_title": "OriginFill — Auto-fill job applications"
+  },
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.myworkdayjobs.com/*",
+        "*://*.myworkday.com/*",
+        "*://*.greenhouse.io/*",
+        "*://*.lever.co/*",
+        "*://*.icims.com/*",
+        "*://*.taleo.net/*"
+      ],
+      "js": [
+        "utils/constants.js",
+        "utils/logger.js",
+        "utils/fuzzy-match.js",
+        "utils/field-mapper.js",
+        "storage/encryption.js",
+        "storage/store.js",
+        "content/portals/workday.js",
+        "content/portals/generic.js",
+        "content/detector.js",
+        "content/filler.js",
+        "content/observer.js",
+        "content/session-guard.js",
+        "content/init.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "notifications",
+    "tabs",
+    "alarms"
+  ],
+  "host_permissions": [
+    "*://*.myworkdayjobs.com/*",
+    "*://*.myworkday.com/*",
+    "*://*.greenhouse.io/*",
+    "*://*.lever.co/*",
+    "*://*.icims.com/*",
+    "*://*.taleo.net/*"
+  ],
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+F",
+        "mac": "Command+Shift+F"
+      },
+      "description": "Open OriginFill popup"
+    }
+  },
+  "options_ui": {
+    "page": "settings/settings.html",
+    "open_in_tab": true
+  },
+  "default_locale": "en"
+}

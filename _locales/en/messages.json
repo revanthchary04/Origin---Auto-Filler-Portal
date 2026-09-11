@@ -1,0 +1,217 @@
+{
+  "extensionName": {
+    "message": "OriginFill",
+    "description": "The display name of the extension"
+  },
+  "extensionDescription": {
+    "message": "Auto-fill Workday job applications instantly. Recover lost data after session timeouts. Never lose a job application form again.",
+    "description": "The description of the extension shown in Chrome Web Store and extension management"
+  },
+  "popupTitle": {
+    "message": "OriginFill",
+    "description": "Title shown in the popup header"
+  },
+  "popupTagline": {
+    "message": "Never lose a job application form again.",
+    "description": "Tagline shown in popup"
+  },
+  "noFormDetected": {
+    "message": "No job form detected",
+    "description": "Shown when no job application form is found on the current page"
+  },
+  "navigateToPortal": {
+    "message": "Navigate to a job portal to get started.",
+    "description": "Instruction when no form is detected"
+  },
+  "portalDetected": {
+    "message": "$PORTAL$ Detected",
+    "description": "Shown when a job portal is detected",
+    "placeholders": {
+      "portal": {
+        "content": "$1",
+        "example": "Workday"
+      }
+    }
+  },
+  "genericPortal": {
+    "message": "Generic Portal",
+    "description": "Label for unrecognized job portals"
+  },
+  "genericPortalWarning": {
+    "message": "Field matching may vary on this portal.",
+    "description": "Warning for generic portal detection"
+  },
+  "autoFillAll": {
+    "message": "Auto-Fill All",
+    "description": "Button text to fill all form fields"
+  },
+  "fillPersonal": {
+    "message": "Personal Info",
+    "description": "Button text to fill personal information"
+  },
+  "fillEducation": {
+    "message": "Education",
+    "description": "Button text to fill education information"
+  },
+  "fillWorkExperience": {
+    "message": "Work Experience",
+    "description": "Button text to fill work experience information"
+  },
+  "fillInProgress": {
+    "message": "Filling form...",
+    "description": "Shown while auto-fill is in progress"
+  },
+  "fillComplete": {
+    "message": "Fill Complete",
+    "description": "Shown when auto-fill is finished"
+  },
+  "fieldsFilled": {
+    "message": "$COUNT$ fields filled",
+    "description": "Count of successfully filled fields",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "22"
+      }
+    }
+  },
+  "fieldsNeedAttention": {
+    "message": "$COUNT$ fields need attention",
+    "description": "Count of fields that may need manual review",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "2"
+      }
+    }
+  },
+  "viewReport": {
+    "message": "View Fill Report",
+    "description": "Link to view detailed fill report"
+  },
+  "sessionRecovered": {
+    "message": "Session Recovered",
+    "description": "Title when session recovery data is available"
+  },
+  "sessionRecoveredDesc": {
+    "message": "Your last form data is ready to restore.",
+    "description": "Description for session recovery"
+  },
+  "restoreNow": {
+    "message": "Restore Now",
+    "description": "Button to restore session data"
+  },
+  "dismiss": {
+    "message": "Dismiss",
+    "description": "Button to dismiss a notification or banner"
+  },
+  "sessionExpiredNotification": {
+    "message": "Session expired on $PORTAL$. OriginFill saved your data.",
+    "description": "Browser notification when session timeout is detected",
+    "placeholders": {
+      "portal": {
+        "content": "$1",
+        "example": "Workday"
+      }
+    }
+  },
+  "timeSaved": {
+    "message": "$TIME$ saved",
+    "description": "Display of total time saved",
+    "placeholders": {
+      "time": {
+        "content": "$1",
+        "example": "3.4 hours"
+      }
+    }
+  },
+  "recoveries": {
+    "message": "$COUNT$ recoveries",
+    "description": "Count of session recoveries",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "5"
+      }
+    }
+  },
+  "applicationsFilled": {
+    "message": "$COUNT$ applications filled",
+    "description": "Total fill count",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "47"
+      }
+    }
+  },
+  "goToSettings": {
+    "message": "Go to Settings",
+    "description": "Link to open settings page"
+  },
+  "profile": {
+    "message": "Profile",
+    "description": "Label for profile selector"
+  },
+  "settingsTitle": {
+    "message": "OriginFill Settings",
+    "description": "Title of the settings page"
+  },
+  "welcomeTitle": {
+    "message": "Welcome to OriginFill!",
+    "description": "First-run welcome title"
+  },
+  "welcomeDesc": {
+    "message": "Set up your profile to start auto-filling job applications in seconds.",
+    "description": "First-run welcome description"
+  },
+  "setupProfile": {
+    "message": "Set Up Profile",
+    "description": "Button to start profile setup"
+  },
+  "pageIndicator": {
+    "message": "Page $CURRENT$ of $TOTAL$ · $NAME$",
+    "description": "Multi-page form page indicator",
+    "placeholders": {
+      "current": { "content": "$1", "example": "1" },
+      "total": { "content": "$2", "example": "3" },
+      "name": { "content": "$3", "example": "Personal" }
+    }
+  },
+  "couldNotMatch": {
+    "message": "Couldn't match '$VALUE$'. Please select manually.",
+    "description": "Tooltip when fuzzy match fails",
+    "placeholders": {
+      "value": {
+        "content": "$1",
+        "example": "University of Delhi"
+      }
+    }
+  },
+  "exportData": {
+    "message": "Export Data",
+    "description": "Button to export all data"
+  },
+  "importData": {
+    "message": "Import Data",
+    "description": "Button to import data"
+  },
+  "clearAllData": {
+    "message": "Clear All Data",
+    "description": "Button to delete all stored data"
+  },
+  "clearDataConfirm": {
+    "message": "Are you sure? This will permanently delete all profiles, settings, and saved data. This action cannot be undone.",
+    "description": "Confirmation dialog for clearing all data"
+  },
+  "version": {
+    "message": "Version $VERSION$",
+    "description": "Version display",
+    "placeholders": {
+      "version": {
+        "content": "$1",
+        "example": "1.0.0"
+      }
+    }
+  }
+}

@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=340">
+  <title>OriginFill</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup" id="popup" role="main" aria-label="OriginFill extension popup">
+
+    <!-- ─── Header ─────────────────────────────────────────── -->
+    <header class="popup__header" id="popupHeader">
+      <div class="popup__header-left">
+        <img src="../assets/icons/icon32.png" alt="OriginFill" class="popup__logo" width="24" height="24">
+        <h1 class="popup__title">OriginFill</h1>
+      </div>
+      <div class="popup__header-right">
+        <div class="popup__profile-switcher" id="profileSwitcher">
+          <select class="popup__profile-select" id="profileSelect" aria-label="Select profile">
+            <option value="">Loading...</option>
+          </select>
+        </div>
+        <button class="popup__settings-btn" id="settingsBtn" aria-label="Open settings" title="Settings">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- ─── Portal Badge ───────────────────────────────────── -->
+    <div class="popup__badge" id="portalBadge" role="status" aria-live="polite">
+      <span class="popup__badge-icon" id="badgeIcon">🔵</span>
+      <span class="popup__badge-text" id="badgeText">Detecting...</span>
+    </div>
+
+    <!-- ─── STATE: Welcome / First Run ─────────────────────── -->
+    <section class="popup__state popup__state--welcome" id="stateWelcome" hidden>
+      <div class="popup__welcome-icon">👋</div>
+      <h2 class="popup__welcome-title">Welcome to OriginFill!</h2>
+      <p class="popup__welcome-desc">Set up your profile to start auto-filling job applications in seconds.</p>
+      <button class="popup__btn popup__btn--primary popup__btn--full" id="setupProfileBtn">
+        <span class="popup__btn-icon">⚙️</span>
+        Set Up Profile
+      </button>
+    </section>
+
+    <!-- ─── STATE: No Form Detected ────────────────────────── -->
+    <section class="popup__state popup__state--no-form" id="stateNoForm" hidden>
+      <div class="popup__empty-icon">📋</div>
+      <p class="popup__empty-text">No job form detected on this page.</p>
+      <p class="popup__empty-sub">Navigate to a Workday or other job portal to get started.</p>
+      <button class="popup__btn popup__btn--secondary popup__btn--full" id="goSettingsBtn">
+        <span class="popup__btn-icon">⚙️</span>
+        Go to Settings
+      </button>
+    </section>
+
+    <!-- ─── STATE: Portal Detected ─────────────────────────── -->
+    <section class="popup__state popup__state--detected" id="stateDetected" hidden>
+      <!-- Page indicator -->
+      <div class="popup__page-indicator" id="pageIndicator">
+        <span class="popup__page-text" id="pageText">Page 1 of 3 · Personal</span>
+      </div>
+
+      <!-- Fill buttons -->
+      <div class="popup__actions">
+        <button class="popup__btn popup__btn--primary popup__btn--full" id="fillAllBtn">
+          <span class="popup__btn-icon">⚡</span>
+          Auto-Fill All
+        </button>
+        <div class="popup__section-btns">
+          <button class="popup__btn popup__btn--section" id="fillPersonalBtn" data-section="personal">
+            <span class="popup__btn-icon">👤</span>
+            Personal
+          </button>
+          <button class="popup__btn popup__btn--section" id="fillEducationBtn" data-section="education">
+            <span class="popup__btn-icon">🎓</span>
+            Education
+          </button>
+          <button class="popup__btn popup__btn--section" id="fillWorkBtn" data-section="workExperience">
+            <span class="popup__btn-icon">💼</span>
+            Work Exp
+          </button>
+        </div>
+      </div>
+
+      <!-- Last fill summary -->
+      <div class="popup__fill-summary" id="fillSummary" hidden>
+        <div class="popup__fill-summary-text" id="fillSummaryText"></div>
+        <button class="popup__link" id="viewReportBtn">View Fill Report</button>
+      </div>
+    </section>
+
+    <!-- ─── STATE: Session Recovery ────────────────────────── -->
+    <section class="popup__state popup__state--recovery" id="stateRecovery" hidden>
+      <div class="popup__recovery-icon">⚠️</div>
+      <h2 class="popup__recovery-title">Session Recovered</h2>
+      <p class="popup__recovery-desc">Your last form data is ready to restore.</p>
+      <div class="popup__recovery-meta" id="recoveryMeta"></div>
+      <div class="popup__recovery-actions">
+        <button class="popup__btn popup__btn--primary" id="restoreBtn">
+          <span class="popup__btn-icon">🔄</span>
+          Restore Now
+        </button>
+        <button class="popup__btn popup__btn--ghost" id="dismissRecoveryBtn">Dismiss</button>
+      </div>
+    </section>
+
+    <!-- ─── STATE: Fill In Progress ────────────────────────── -->
+    <section class="popup__state popup__state--filling" id="stateFilling" hidden>
+      <div class="popup__filling-icon">⚡</div>
+      <h2 class="popup__filling-title">Filling form...</h2>
+      <div class="popup__progress">
+        <div class="popup__progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" id="progressBar">
+          <div class="popup__progress-fill" id="progressFill" style="width: 0%"></div>
+        </div>
+        <span class="popup__progress-text" id="progressText">0%</span>
+      </div>
+      <p class="popup__filling-field" id="fillingField">Preparing...</p>
+    </section>
+
+    <!-- ─── STATE: Fill Complete ───────────────────────────── -->
+    <section class="popup__state popup__state--complete" id="stateComplete" hidden>
+      <div class="popup__complete-icon">✅</div>
+      <h2 class="popup__complete-title">Fill Complete</h2>
+      <div class="popup__complete-stats">
+        <div class="popup__stat popup__stat--success">
+          <span class="popup__stat-num" id="statSuccess">0</span>
+          <span class="popup__stat-label">Filled</span>
+        </div>
+        <div class="popup__stat popup__stat--attention">
+          <span class="popup__stat-num" id="statAttention">0</span>
+          <span class="popup__stat-label">Attention</span>
+        </div>
+        <div class="popup__stat popup__stat--failed">
+          <span class="popup__stat-num" id="statFailed">0</span>
+          <span class="popup__stat-label">Failed</span>
+        </div>
+      </div>
+      <p class="popup__complete-time" id="completeTime"></p>
+      <button class="popup__link" id="viewFullReportBtn">View Full Report</button>
+      <button class="popup__btn popup__btn--secondary popup__btn--full popup__btn--mt" id="fillAgainBtn">
+        Fill Again
+      </button>
+    </section>
+
+    <!-- ─── Fill Report (expandable) ───────────────────────── -->
+    <section class="popup__report" id="fillReport" hidden>
+      <div class="popup__report-header" id="reportHeader">
+        <h3 class="popup__report-title">Fill Report</h3>
+        <button class="popup__report-close" id="closeReportBtn" aria-label="Close report">✕</button>
+      </div>
+      <div class="popup__report-meta" id="reportMeta"></div>
+      <div class="popup__report-body" id="reportBody">
+        <!-- Filled dynamically -->
+      </div>
+    </section>
+
+    <!-- ─── Footer Stats ───────────────────────────────────── -->
+    <footer class="popup__footer" id="popupFooter">
+      <div class="popup__stats">
+        <span class="popup__stat-item" id="statTimeSaved" title="Time saved">
+          <span class="popup__stat-icon">⏱</span>
+          <span class="popup__stat-value" id="timeSavedValue">0 min</span>
+        </span>
+        <span class="popup__stat-item" id="statRecoveries" title="Session recoveries">
+          <span class="popup__stat-icon">🔄</span>
+          <span class="popup__stat-value" id="recoveriesValue">0</span>
+        </span>
+        <span class="popup__stat-item" id="statFillCount" title="Applications filled">
+          <span class="popup__stat-icon">📝</span>
+          <span class="popup__stat-value" id="fillCountValue">0</span>
+        </span>
+      </div>
+    </footer>
+
+  </div>
+
+  <!-- Scripts loaded in dependency order -->
+  <script src="../storage/encryption.js"></script>
+  <script src="../storage/store.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

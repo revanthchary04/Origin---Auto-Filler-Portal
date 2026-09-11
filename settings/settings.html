@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OriginFill Settings</title>
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+  <div class="settings" id="settings">
+
+    <!-- ─── Sidebar ──────────────────────────────────────── -->
+    <nav class="settings__sidebar" id="sidebar">
+      <div class="settings__sidebar-header">
+        <img src="../assets/icons/icon32.png" alt="OriginFill" class="settings__logo" width="28" height="28">
+        <div>
+          <h1 class="settings__brand">OriginFill</h1>
+          <span class="settings__version" id="versionText">v1.0.0</span>
+        </div>
+      </div>
+
+      <ul class="settings__nav" id="nav" role="navigation" aria-label="Settings navigation">
+        <li><a class="settings__nav-item settings__nav-item--active" href="#profiles" data-section="profiles" aria-current="page">
+          <span class="settings__nav-icon">👤</span> Profiles
+        </a></li>
+        <li><a class="settings__nav-item" href="#personal" data-section="personal">
+          <span class="settings__nav-icon">📝</span> Personal Info
+        </a></li>
+        <li><a class="settings__nav-item" href="#education" data-section="education">
+          <span class="settings__nav-icon">🎓</span> Education
+        </a></li>
+        <li><a class="settings__nav-item" href="#work" data-section="work">
+          <span class="settings__nav-icon">💼</span> Work Experience
+        </a></li>
+        <li><a class="settings__nav-item" href="#resume" data-section="resume">
+          <span class="settings__nav-icon">📄</span> Resume
+        </a></li>
+        <li><a class="settings__nav-item" href="#skills" data-section="skills">
+          <span class="settings__nav-icon">🔧</span> Skills & Extras
+        </a></li>
+        <li class="settings__nav-divider"></li>
+        <li><a class="settings__nav-item" href="#extension" data-section="extension">
+          <span class="settings__nav-icon">⚙️</span> Extension Settings
+        </a></li>
+        <li><a class="settings__nav-item" href="#privacy" data-section="privacy">
+          <span class="settings__nav-icon">🔒</span> Privacy & Data
+        </a></li>
+        <li><a class="settings__nav-item" href="#about" data-section="about">
+          <span class="settings__nav-icon">ℹ️</span> About
+        </a></li>
+      </ul>
+    </nav>
+
+    <!-- ─── Main Content ─────────────────────────────────── -->
+    <main class="settings__main" id="main">
+
+      <!-- ─── SECTION: Profiles ──────────────────────── -->
+      <section class="settings__section" id="section-profiles">
+        <h2 class="settings__section-title">Profiles</h2>
+        <p class="settings__section-desc">Manage your application profiles for different job roles.</p>
+
+        <div class="settings__profiles-list" id="profilesList">
+          <!-- Populated by JS -->
+        </div>
+
+        <div class="settings__profiles-actions">
+          <button class="settings__btn settings__btn--primary" id="addProfileBtn">
+            <span>+</span> Add New Profile
+          </button>
+        </div>
+      </section>
+
+      <!-- ─── SECTION: Personal Information ──────────── -->
+      <section class="settings__section" id="section-personal" hidden>
+        <h2 class="settings__section-title">Personal Information</h2>
+        <p class="settings__section-desc">Your basic contact information used in job applications.</p>
+
+        <div class="settings__form">
+          <div class="settings__row settings__row--2col">
+            <div class="settings__field">
+              <label class="settings__label" for="personalFirstName">First Name</label>
+              <input class="settings__input" type="text" id="personalFirstName" placeholder="John" autocomplete="given-name">
+            </div>
+            <div class="settings__field">
+              <label class="settings__label" for="personalLastName">Last Name</label>
+              <input class="settings__input" type="text" id="personalLastName" placeholder="Doe" autocomplete="family-name">
+            </div>
+          </div>
+
+          <div class="settings__field">
+            <label class="settings__label" for="personalFullName">Full Name <span class="settings__label-hint">(auto-generated if blank)</span></label>
+            <input class="settings__input" type="text" id="personalFullName" placeholder="John Doe" autocomplete="name">
+          </div>
+
+          <div class="settings__row settings__row--2col">
+            <div class="settings__field">
+              <label class="settings__label" for="personalEmail">Email</label>
+              <input class="settings__input" type="email" id="personalEmail" placeholder="john@example.com" autocomplete="email">
+            </div>
+            <div class="settings__field">
+              <label class="settings__label" for="personalPhone">Phone</label>
+              <input class="settings__input" type="tel" id="personalPhone" placeholder="+1 (555) 123-4567" autocomplete="tel">
+            </div>
+          </div>
+
+          <div class="settings__field">
+            <label class="settings__label" for="personalAddress">Street Address</label>
+            <input class="settings__input" type="text" id="personalAddress" placeholder="123 Main St" autocomplete="street-address">
+          </div>
+
+          <div class="settings__row settings__row--3col">
+            <div class="settings__field">
+              <label class="settings__label" for="personalCity">City</label>
+              <input class="settings__input" type="text" id="personalCity" placeholder="San Francisco" autocomplete="address-level2">
+            </div>
+            <div class="settings__field">
+              <label class="settings__label" for="personalState">State / Province</label>
+              <input class="settings__input" type="text" id="personalState" placeholder="California" autocomplete="address-level1">
+            </div>
+            <div class="settings__field">
+              <label class="settings__label" for="personalZipCode">ZIP / Postal Code</label>
+              <input class="settings__input" type="text" id="personalZipCode" placeholder="94102" autocomplete="postal-code">
+            </div>
+          </div>
+
+          <div class="settings__field">
+            <label class="settings__label" for="personalCountry">Country</label>
+            <input class="settings__input" type="text" id="personalCountry" placeholder="United States" autocomplete="country-name">
+          </div>
+
+          <div class="settings__divider"></div>
+          <h3 class="settings__subsection-title">Social & Portfolio</h3>
+
+          <div class="settings__field">
+            <label class="settings__label" for="personalLinkedIn">LinkedIn URL</label>
+            <input class="settings__input" type="url" id="personalLinkedIn" placeholder="https://linkedin.com/in/johndoe">
+          </div>
+
+          <div class="settings__row settings__row--2col">
+            <div class="settings__field">
+              <label class="settings__label" for="personalGithub">GitHub URL</label>
+              <input class="settings__input" type="url" id="personalGithub" placeholder="https://github.com/johndoe">
+            </div>
+            <div class="settings__field">
+              <label class="settings__label" for="personalPortfolio">Portfolio / Website</label>
+              <input class="settings__input" type="url" id="personalPortfolio" placeholder="https://johndoe.dev">
+            </div>
+          </div>
+        </div>
+
+        <div class="settings__form-actions">
+          <button class="settings__btn settings__btn--primary" id="savePersonalBtn">Save Changes</button>
+          <span class="settings__save-status" id="personalSaveStatus"></span>
+        </div>
+      </section>
+
+      <!-- ─── SECTION: Education ─────────────────────── -->
+      <section class="settings__section" id="section-education" hidden>
+        <h2 class="settings__section-title">Education</h2>
+        <p class="settings__section-desc">Add your educational background. You can add multiple entries.</p>
+
+        <div class="settings__entries" id="educationEntries">
+          <!-- Populated by JS -->
+        </div>
+
+        <button class="settings__btn settings__btn--secondary" id="addEducationBtn">
+          <span>+</span> Add Education
+        </button>
+      </section>
+
+      <!-- ─── SECTION: Work Experience ───────────────── -->
+      <section class="settings__section" id="section-work" hidden>
+        <h2 class="settings__section-title">Work Experience</h2>
+        <p class="settings__section-desc">Add your work history. Most recent position first.</p>
+
+        <div class="settings__entries" id="workEntries">
+          <!-- Populated by JS -->
+        </div>
+
+        <button class="settings__btn settings__btn--secondary" id="addWorkBtn">
+          <span>+</span> Add Work Experience
+        </button>
+      </section>
+
+      <!-- ─── SECTION: Resume ────────────────────────── -->
+      <section class="settings__section" id="section-resume" hidden>
+        <h2 class="settings__section-title">Resume</h2>
+        <p class="settings__section-desc">Upload up to 3 resume versions. PDF format, max 5MB each.</p>
+
+        <div class="settings__resumes" id="resumesList">
+          <!-- Populated by JS -->
+        </div>
+
+        <div class="settings__upload-zone" id="uploadZone">
+          <input type="file" id="resumeFileInput" accept=".pdf,.doc,.docx" hidden>
+          <div class="settings__upload-content">
+            <span class="settings__upload-icon">📄</span>
+            <p class="settings__upload-text">Drop a file here or <button class="settings__link" id="browseBtn">browse</button></p>
+            <p class="settings__upload-hint">PDF, DOC, DOCX · Max 5MB</p>
+          </div>
+        </div>
+
+        <div class="settings__field" style="margin-top: 12px;">
+          <label class="settings__label" for="resumeLabel">Resume Label</label>
+          <input class="settings__input" type="text" id="resumeLabel" placeholder="e.g., SE Resume, PM Resume">
+        </div>
+
+        <button class="settings__btn settings__btn--primary" id="uploadResumeBtn" disabled>
+          Upload Resume
+        </button>
+      </section>
+
+      <!-- ─── SECTION: Skills & Extras ───────────────── -->
+      <section class="settings__section" id="section-skills" hidden>
+        <h2 class="settings__section-title">Skills & Extras</h2>
+
+        <div class="settings__form">
+          <div class="settings__field">
+            <label class="settings__label" for="skillsInput">Skills <span class="settings__label-hint">(comma separated)</span></label>
+            <textarea class="settings__textarea" id="skillsInput" rows="3" placeholder="JavaScript, React, Node.js, Python, AWS..."></textarea>
+          </div>
+
+          <div class="settings__field">
+            <label class="settings__label" for="languagesInput">Languages Spoken</label>
+            <textarea class="settings__textarea" id="languagesInput" rows="2" placeholder="English (Native), Spanish (Intermediate)..."></textarea>
+          </div>
+
+          <div class="settings__field">
+            <label class="settings__label" for="certificationsInput">Certifications</label>
+            <textarea class="settings__textarea" id="certificationsInput" rows="2" placeholder="AWS Solutions Architect, PMP, Google Cloud Professional..."></textarea>
+          </div>
+        </div>
+
+        <div class="settings__form-actions">
+          <button class="settings__btn settings__btn--primary" id="saveSkillsBtn">Save Changes</button>
+          <span class="settings__save-status" id="skillsSaveStatus"></span>
+        </div>
+      </section>
+
+      <!-- ─── SECTION: Extension Settings ────────────── -->
+      <section class="settings__section" id="section-extension" hidden>
+        <h2 class="settings__section-title">Extension Settings</h2>
+
+        <div class="settings__form">
+          <div class="settings__toggle-group">
+            <div class="settings__toggle-row">
+              <div>
+                <span class="settings__toggle-label">Auto-detect portals</span>
+                <span class="settings__toggle-desc">Automatically detect job portals when pages load</span>
+              </div>
+              <label class="settings__switch" for="toggleAutoDetect">
+                <input type="checkbox" id="toggleAutoDetect" checked>
+                <span class="settings__switch-slider"></span>
+              </label>
+            </div>
+
+            <div class="settings__toggle-row">
+              <div>
+                <span class="settings__toggle-label">Auto-fill on detection</span>
+                <span class="settings__toggle-desc">Automatically fill forms when a portal is detected</span>
+              </div>
+              <label class="settings__switch" for="toggleAutoFill">
+                <input type="checkbox" id="toggleAutoFill">
+                <span class="settings__switch-slider"></span>
+              </label>
+            </div>
+
+            <div class="settings__toggle-row">
+              <div>
+                <span class="settings__toggle-label">Show notifications</span>
+                <span class="settings__toggle-desc">Browser notifications for session timeouts and fill status</span>
+              </div>
+              <label class="settings__switch" for="toggleNotifications">
+                <input type="checkbox" id="toggleNotifications" checked>
+                <span class="settings__switch-slider"></span>
+              </label>
+            </div>
+
+            <div class="settings__toggle-row">
+              <div>
+                <span class="settings__toggle-label">Session recovery</span>
+                <span class="settings__toggle-desc">Save form data automatically to recover after timeouts</span>
+              </div>
+              <label class="settings__switch" for="toggleRecovery">
+                <input type="checkbox" id="toggleRecovery" checked>
+                <span class="settings__switch-slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="settings__divider"></div>
+
+          <div class="settings__field">
+            <label class="settings__label" for="fillDelaySlider">Fill Delay: <span id="fillDelayValue">300</span>ms</label>
+            <input class="settings__slider" type="range" id="fillDelaySlider" min="100" max="1000" step="50" value="300">
+            <span class="settings__slider-hint">Lower = faster fill, Higher = more reliable on slow pages</span>
+          </div>
+
+          <div class="settings__field">
+            <label class="settings__label" for="themeSelect">Theme</label>
+            <select class="settings__select" id="themeSelect">
+              <option value="system">System (Auto)</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </div>
+
+          <div class="settings__divider"></div>
+
+          <div class="settings__info-box">
+            <span class="settings__info-icon">⌨️</span>
+            <div>
+              <strong>Keyboard Shortcut</strong>
+              <p>Ctrl+Shift+F (Windows) / Cmd+Shift+F (Mac)</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings__form-actions">
+          <button class="settings__btn settings__btn--primary" id="saveExtSettingsBtn">Save Settings</button>
+          <span class="settings__save-status" id="extSettingsSaveStatus"></span>
+        </div>
+      </section>
+
+      <!-- ─── SECTION: Privacy & Data ────────────────── -->
+      <section class="settings__section" id="section-privacy" hidden>
+        <h2 class="settings__section-title">Privacy & Data</h2>
+
+        <div class="settings__info-box settings__info-box--success">
+          <span class="settings__info-icon">🔒</span>
+          <div>
+            <strong>Your data is encrypted</strong>
+            <p>All profile data is encrypted with AES-256-GCM and stored locally in your browser. No data is ever sent to external servers.</p>
+          </div>
+        </div>
+
+        <div class="settings__form">
+          <div class="settings__data-actions">
+            <div class="settings__data-action">
+              <div>
+                <strong>Export Data</strong>
+                <p>Download all your profiles and settings as a JSON file.</p>
+              </div>
+              <button class="settings__btn settings__btn--secondary" id="exportDataBtn">Export JSON</button>
+            </div>
+
+            <div class="settings__data-action">
+              <div>
+                <strong>Import Data</strong>
+                <p>Restore from a previously exported JSON file.</p>
+              </div>
+              <input type="file" id="importFileInput" accept=".json" hidden>
+              <button class="settings__btn settings__btn--secondary" id="importDataBtn">Import JSON</button>
+            </div>
+
+            <div class="settings__divider"></div>
+
+            <div class="settings__data-action settings__data-action--danger">
+              <div>
+                <strong>Clear All Data</strong>
+                <p>Permanently delete all profiles, settings, and saved data. This cannot be undone.</p>
+              </div>
+              <button class="settings__btn settings__btn--danger" id="clearDataBtn">Clear All Data</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── SECTION: About ─────────────────────────── -->
+      <section class="settings__section" id="section-about" hidden>
+        <h2 class="settings__section-title">About OriginFill</h2>
+
+        <div class="settings__about">
+          <div class="settings__about-header">
+            <img src="../assets/icons/icon128.png" alt="OriginFill" class="settings__about-logo" width="64" height="64">
+            <div>
+              <h3 class="settings__about-name">OriginFill</h3>
+              <p class="settings__about-tagline">Never lose a job application form again.</p>
+              <p class="settings__about-version" id="aboutVersion">Version 1.0.0</p>
+            </div>
+          </div>
+
+          <div class="settings__about-links">
+            <a href="https://github.com/CharyWorld/OriginFill" target="_blank" rel="noopener" class="settings__about-link">
+              <span>🔗</span> GitHub Repository
+            </a>
+            <a href="https://github.com/CharyWorld/OriginFill/issues/new?template=bug_report.md" target="_blank" rel="noopener" class="settings__about-link">
+              <span>🐛</span> Report a Bug
+            </a>
+            <a href="https://github.com/CharyWorld/OriginFill/issues/new?template=feature_request.md" target="_blank" rel="noopener" class="settings__about-link">
+              <span>💡</span> Request a Feature
+            </a>
+            <a href="https://github.com/CharyWorld/OriginFill/blob/main/CHANGELOG.md" target="_blank" rel="noopener" class="settings__about-link">
+              <span>📋</span> Changelog
+            </a>
+          </div>
+
+          <div class="settings__about-footer">
+            <p>Made with ❤️ by <strong>CharyWorld</strong></p>
+            <p class="settings__about-license">Licensed under AGPL-3.0</p>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Confirmation Dialog -->
+  <dialog class="settings__dialog" id="confirmDialog">
+    <div class="settings__dialog-content">
+      <h3 class="settings__dialog-title" id="dialogTitle">Confirm</h3>
+      <p class="settings__dialog-text" id="dialogText">Are you sure?</p>
+      <div class="settings__dialog-actions">
+        <button class="settings__btn settings__btn--ghost" id="dialogCancelBtn">Cancel</button>
+        <button class="settings__btn settings__btn--danger" id="dialogConfirmBtn">Confirm</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Toast Notification -->
+  <div class="settings__toast" id="toast" hidden>
+    <span class="settings__toast-icon" id="toastIcon">✅</span>
+    <span class="settings__toast-text" id="toastText">Saved</span>
+  </div>
+
+  <script src="../utils/constants.js"></script>
+  <script src="../utils/logger.js"></script>
+  <script src="../storage/encryption.js"></script>
+  <script src="../storage/store.js"></script>
+  <script src="settings.js"></script>
+</body>
+</html>
