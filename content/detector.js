@@ -23,6 +23,31 @@ const OriginFillDetector = (() => {
   function detectFromURL(url) {
     if (!url) return null;
 
+    try {
+      const hostname = window.location.hostname || new URL(url).hostname;
+      if (
+        hostname.endsWith('myworkdayjobs.com') ||
+        hostname.endsWith('myworkday.com') ||
+        hostname.includes('workday')
+      ) {
+        return { type: OriginFillPortals.WORKDAY, confidence: OriginFillConfidence.MEDIUM };
+      }
+      if (hostname.endsWith('greenhouse.io') || hostname.includes('greenhouse')) {
+        return { type: OriginFillPortals.GREENHOUSE, confidence: OriginFillConfidence.MEDIUM };
+      }
+      if (hostname.endsWith('lever.co') || hostname.includes('lever')) {
+        return { type: OriginFillPortals.LEVER, confidence: OriginFillConfidence.MEDIUM };
+      }
+      if (hostname.endsWith('icims.com') || hostname.includes('icims')) {
+        return { type: OriginFillPortals.ICIMS, confidence: OriginFillConfidence.MEDIUM };
+      }
+      if (hostname.endsWith('taleo.net') || hostname.includes('taleo')) {
+        return { type: OriginFillPortals.TALEO, confidence: OriginFillConfidence.MEDIUM };
+      }
+    } catch (e) {
+      // Fall through to regex patterns
+    }
+
     for (const { type, pattern } of OriginFillPortalPatterns) {
       if (pattern.test(url)) {
         return { type, confidence: OriginFillConfidence.MEDIUM };
@@ -75,11 +100,16 @@ const OriginFillDetector = (() => {
     // Detect which page of the application form we're on
     let pageName = detectWorkdayPage();
 
-    const confirmed = hasAutomationIds || hasWorkdayClasses;
+    const hostname = window.location.hostname || '';
+    const isWorkdayDomain = hostname.endsWith('myworkdayjobs.com') || hostname.endsWith('myworkday.com') || hostname.includes('workday');
+
+    const confirmed = hasAutomationIds || hasWorkdayClasses || isWorkdayDomain;
     return {
       confirmed,
       pageName,
-      confidence: confirmed ? OriginFillConfidence.HIGH : OriginFillConfidence.NONE
+      confidence: (hasAutomationIds || hasWorkdayClasses)
+        ? OriginFillConfidence.HIGH
+        : (isWorkdayDomain ? OriginFillConfidence.MEDIUM : OriginFillConfidence.NONE)
     };
   }
 

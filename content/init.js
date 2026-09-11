@@ -13,6 +13,7 @@
   // Prevent double initialization
   if (window.__originfill_initialized) return;
   window.__originfill_initialized = true;
+  window.__originFillLoaded = true;
 
   OriginFillLogger.info('Content script initializing...');
   OriginFillLogger.time('Content init');
