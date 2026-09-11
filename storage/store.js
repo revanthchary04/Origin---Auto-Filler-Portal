@@ -137,12 +137,19 @@ const OriginFillStore = (() => {
    */
   async function readEncrypted(key) {
     const result = await chrome.storage.local.get(key);
-    if (!result[key]) return null;
+    if (!result || !result[key]) return null;
+    const val = result[key];
+
+    // If already a plain array or object (not base64 string)
+    if (Array.isArray(val) || (typeof val === 'object' && val !== null && !val.iv)) {
+      return val;
+    }
 
     try {
-      return await OriginFillEncryption.decryptObject(result[key]);
+      return await OriginFillEncryption.decryptObject(val);
     } catch (e) {
       OriginFillLogger.error(`Failed to decrypt ${key}`, e);
+      if (typeof val === 'object') return val;
       return null;
     }
   }
@@ -193,8 +200,36 @@ const OriginFillStore = (() => {
    * @returns {Promise<Array>}
    */
   async function getProfiles() {
-    await OriginFillEncryption.initializeKey();
-    const profiles = await readEncrypted(OriginFillStorageKeys.PROFILES);
+    try {
+      if (typeof OriginFillEncryption !== 'undefined' && OriginFillEncryption.initializeKey) {
+        await OriginFillEncryption.initializeKey();
+      }
+    } catch (e) {
+      OriginFillLogger.warn('Key init skipped or failed:', e);
+    }
+
+    // 1. Try reading encrypted OriginFillStorageKeys.PROFILES ('originfill_profiles')
+    let profiles = null;
+    try {
+      profiles = await readEncrypted(OriginFillStorageKeys.PROFILES);
+    } catch (e) {
+      OriginFillLogger.warn('Encrypted read failed:', e);
+    }
+
+    // 2. Fallback: check standard 'profiles' key in chrome.storage.local
+    if (!profiles || profiles.length === 0) {
+      try {
+        const raw = await chrome.storage.local.get(['profiles', OriginFillStorageKeys.PROFILES]);
+        if (Array.isArray(raw.profiles) && raw.profiles.length > 0) {
+          profiles = raw.profiles;
+        } else if (Array.isArray(raw[OriginFillStorageKeys.PROFILES])) {
+          profiles = raw[OriginFillStorageKeys.PROFILES];
+        }
+      } catch (e) {
+        OriginFillLogger.warn('Plain profile read failed:', e);
+      }
+    }
+
     return profiles || [];
   }
 
@@ -204,8 +239,17 @@ const OriginFillStore = (() => {
    * @returns {Promise<void>}
    */
   async function saveProfiles(profiles) {
-    await OriginFillEncryption.initializeKey();
-    await writeEncrypted(OriginFillStorageKeys.PROFILES, profiles);
+    try {
+      if (typeof OriginFillEncryption !== 'undefined' && OriginFillEncryption.initializeKey) {
+        await OriginFillEncryption.initializeKey();
+        await writeEncrypted(OriginFillStorageKeys.PROFILES, profiles);
+      }
+    } catch (e) {
+      OriginFillLogger.warn('Encrypted save failed, falling back to plain:', e);
+    }
+
+    // Also mirror to plain 'profiles' key for compatibility and instant DevTools inspection
+    await chrome.storage.local.set({ profiles });
   }
 
   /**
@@ -362,7 +406,10 @@ const OriginFillStore = (() => {
    * @returns {Promise<Object>}
    */
   async function getSettings() {
-    const settings = await readPlain(OriginFillStorageKeys.SETTINGS);
+    let settings = await readPlain(OriginFillStorageKeys.SETTINGS);
+    if (!settings) {
+      settings = await readPlain('settings');
+    }
     return settings
       ? { ...OriginFillDefaultSettings, ...settings }
       : { ...OriginFillDefaultSettings };
@@ -375,6 +422,7 @@ const OriginFillStore = (() => {
    */
   async function saveSettings(settings) {
     await writePlain(OriginFillStorageKeys.SETTINGS, settings);
+    await writePlain('settings', settings);
   }
 
   /**

@@ -88,20 +88,15 @@
       // Load profiles and settings
       await loadProfilesAndSettings();
 
-      // Check first run
-      const isFirstRun = await checkFirstRun();
-      if (isFirstRun) {
-        showState('welcome');
-        updateBadge('none', '🔵', 'Welcome to OriginFill');
-        return;
-      }
-
-      // Check if profile is empty (needs setup)
-      if (await isProfileEmpty()) {
+      // If no profiles exist at all, show welcome/onboarding
+      if (profiles.length === 0) {
         showState('welcome');
         updateBadge('none', '👋', 'Profile setup needed');
         return;
       }
+
+      // Update fill button states
+      updateFillButtonStates();
 
       // Get portal info from active tab
       currentPortalInfo = await getPortalInfo();
@@ -418,34 +413,64 @@
    */
   async function loadProfilesAndSettings() {
     try {
-      // Use chrome.storage directly (encrypted profiles need the store module)
-      const result = await chrome.storage.local.get([
+      // 1. Query chrome.storage.local for both namespaced and plain keys
+      const data = await chrome.storage.local.get([
+        'profiles',
+        'settings',
+        'originfill_profiles',
         'originfill_settings',
         'originfill_first_run'
       ]);
 
-      settings = result.originfill_settings || {};
+      settings = data.settings || data.originfill_settings || {};
 
-      // Load profiles (try decrypting)
-      try {
-        profiles = await OriginFillStore.getProfiles();
-      } catch (e) {
-        // Encryption might not be initialized — try initializing
+      // 2. Try loading profiles through OriginFillStore
+      profiles = [];
+      if (typeof OriginFillStore !== 'undefined' && OriginFillStore.getProfiles) {
         try {
-          await OriginFillEncryption.initializeKey();
           profiles = await OriginFillStore.getProfiles();
-        } catch (e2) {
-          profiles = [];
+        } catch (e) {
+          console.warn('[OriginFill Popup] OriginFillStore.getProfiles warning:', e);
         }
       }
+
+      // 3. Fallback to direct chrome.storage.local keys
+      if (!profiles || profiles.length === 0) {
+        if (Array.isArray(data.profiles) && data.profiles.length > 0) {
+          profiles = data.profiles;
+        } else if (Array.isArray(data.originfill_profiles) && data.originfill_profiles.length > 0) {
+          profiles = data.originfill_profiles;
+        } else if (data.originfill_profiles && typeof OriginFillEncryption !== 'undefined') {
+          try {
+            await OriginFillEncryption.initializeKey();
+            const decrypted = await OriginFillEncryption.decryptObject(data.originfill_profiles);
+            if (Array.isArray(decrypted)) {
+              profiles = decrypted;
+            }
+          } catch (e) {
+            console.warn('[OriginFill Popup] Decryption fallback warning:', e);
+          }
+        }
+      }
+
+      if (!profiles) profiles = [];
+
+      // If profiles are found, mark first-run completed
+      if (profiles.length > 0 && data.originfill_first_run) {
+        await chrome.storage.local.set({ originfill_first_run: false });
+      }
+
+      console.log(`[OriginFill Popup] Profiles count: ${profiles.length}, Active profile ID: ${settings.activeProfileId || '(none)'}`);
 
       // Populate profile selector
       populateProfileSelector();
 
+      return profiles;
     } catch (err) {
       console.error('[OriginFill Popup] Failed to load data:', err);
       profiles = [];
       settings = {};
+      return [];
     }
   }
 
@@ -584,13 +609,38 @@
     const newId = els.profileSelect.value;
     if (newId) {
       settings.activeProfileId = newId;
-      await chrome.storage.local.set({ originfill_settings: settings });
+      await chrome.storage.local.set({
+        originfill_settings: settings,
+        settings: settings
+      });
 
       // Notify content scripts
       chrome.runtime.sendMessage({
         type: 'PROFILE_UPDATED',
         data: { activeProfileId: newId }
       });
+    }
+  });
+
+  // Real-time synchronization when settings or profiles change in settings page
+  chrome.storage.onChanged.addListener(async (changes, areaName) => {
+    if (areaName !== 'local') return;
+    if (
+      changes.profiles ||
+      changes.originfill_profiles ||
+      changes.settings ||
+      changes.originfill_settings
+    ) {
+      console.log('[OriginFill Popup] Storage update detected, refreshing popup...');
+      await loadProfilesAndSettings();
+      if (profiles.length === 0) {
+        showState('welcome');
+      } else if (currentPortalInfo && currentPortalInfo.portalType && currentPortalInfo.portalType !== 'none') {
+        showDetectedState(currentPortalInfo);
+      } else {
+        showState('noForm');
+      }
+      updateFillButtonStates();
     }
   });
 
