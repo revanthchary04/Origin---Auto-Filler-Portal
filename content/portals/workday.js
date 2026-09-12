@@ -38,9 +38,13 @@ const OriginFillWorkday = (() => {
 
     // ─── Education ─────────────────────
     'educationSection_school':        'education[0].institution',
+    'formField-schoolName':           'education[0].institution',
     'educationSection_degree':        'education[0].degree',
+    'formField-degree':               'education[0].degree',
     'educationSection_fieldOfStudy':  'education[0].fieldOfStudy',
+    'formField-fieldOfStudy':         'education[0].fieldOfStudy',
     'educationSection_gpa':           'education[0].gpa',
+    'formField-gpa':                  'education[0].gpa',
     'educationSection_startDate':     'education[0].startYear',
     'educationSection_endDate':       'education[0].endYear',
     'educationSection_startYear':     'education[0].startYear',
@@ -58,6 +62,7 @@ const OriginFillWorkday = (() => {
 
     // ─── Skills ────────────────────────
     'skillsSection_skill':            'skills',
+    'formField-skills':               'skills',
 
     // ─── Resume / CV ───────────────────
     'resumeSection_resume':           'resume',
@@ -66,7 +71,7 @@ const OriginFillWorkday = (() => {
     // ─── LinkedIn ──────────────────────
     'linkedInProfile':                'personal.linkedIn',
     'linkedIn':                       'personal.linkedIn',
-    'website':                        'personal.portfolio',
+    'website':                        'websites',
 
     // ─── Voluntary Self-Identification (skip — sensitive) ─────
     'veteranStatus':                  null,
@@ -76,113 +81,378 @@ const OriginFillWorkday = (() => {
     'raceDropdown':                   null
   });
 
+  // ─── DOM Wait Helpers ──────────────────────────────────────────
+
+  /**
+   * Wait for an element matching a selector to appear in a container.
+   * Uses MutationObserver for efficient waiting.
+   *
+   * @param {string} selector - CSS selector to match
+   * @param {HTMLElement} [container=document.body] - Container to observe
+   * @param {number} [timeout=3000] - Max wait time in ms
+   * @returns {Promise<HTMLElement>}
+   */
+  function waitForElement(selector, container = document.body, timeout = 3000) {
+    return new Promise((resolve, reject) => {
+      const existing = container.querySelector(selector);
+      if (existing) { resolve(existing); return; }
+
+      const observer = new MutationObserver(() => {
+        const el = container.querySelector(selector);
+        if (el) {
+          observer.disconnect();
+          resolve(el);
+        }
+      });
+      observer.observe(container, { childList: true, subtree: true });
+      setTimeout(() => {
+        observer.disconnect();
+        reject(new Error(`waitForElement timeout: ${selector}`));
+      }, timeout);
+    });
+  }
+
+  /**
+   * Wait for dropdown options to appear after typing in a combobox.
+   * Looks for [role="option"] elements inside a [role="listbox"].
+   *
+   * @param {number} [timeout=3000] - Max wait time in ms
+   * @returns {Promise<HTMLElement>} The listbox element containing options
+   */
+  function waitForOptions(timeout = 3000) {
+    return new Promise((resolve, reject) => {
+      // Check if options already visible
+      const existing = document.querySelector('[role="listbox"]')
+        || document.querySelector('[data-automation-id="selectDropdown"]');
+      if (existing && existing.querySelectorAll('[role="option"], li').length > 0) {
+        resolve(existing);
+        return;
+      }
+
+      const observer = new MutationObserver(() => {
+        const listbox = document.querySelector('[role="listbox"]')
+          || document.querySelector('[data-automation-id="selectDropdown"]');
+        if (listbox && listbox.querySelectorAll('[role="option"], li').length > 0) {
+          observer.disconnect();
+          resolve(listbox);
+        }
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      setTimeout(() => {
+        observer.disconnect();
+        // Still try to return what we have
+        const listbox = document.querySelector('[role="listbox"]')
+          || document.querySelector('[data-automation-id="selectDropdown"]');
+        if (listbox) {
+          resolve(listbox);
+        } else {
+          reject(new Error('waitForOptions timeout: no listbox appeared'));
+        }
+      }, timeout);
+    });
+  }
+
+  /**
+   * Wait for a field's value to match expected, with polling.
+   * @param {HTMLElement} element
+   * @param {string} expected
+   * @param {number} [timeout=1000]
+   * @returns {Promise<boolean>}
+   */
+  function waitForValue(element, expected, timeout = 1000) {
+    return new Promise((resolve) => {
+      const startTime = Date.now();
+      function check() {
+        const current = element.value || element.textContent || '';
+        if (current === expected) { resolve(true); return; }
+        if (Date.now() - startTime > timeout) { resolve(false); return; }
+        requestAnimationFrame(check);
+      }
+      check();
+    });
+  }
+
   // ─── Workday-Specific Element Finders ──────────────────────────
 
   /**
    * Find all fillable elements on the current Workday page.
-   * Uses data-automation-id as primary selector.
+   * Uses a multi-layered pipeline:
+   * 1. Collect all data-automation-id containers and resolve exact input
+   * 2. Deduplicate by exact HTMLElement
+   * 3. Fallback to OriginFillFieldMapper semantic detection for remaining inputs
    *
-   * @param {number} [arrayIndex=0] - Index for repeating sections (education, work exp)
-   * @returns {Array<{ element: HTMLElement, automationId: string, profilePath: string, inputType: string }>}
+   * @returns {Array<{ element: HTMLElement, automationId: string, profilePath: string, inputType: string, label: string, confidence: string, source: string }>}
    */
-  function getFields(arrayIndex = 0) {
+  function getFields() {
     const results = [];
-    const processed = new Set();
+    const processedElements = new Set();
+    const mappedAutomationIds = new Set();
 
-    // 1. Find elements with data-automation-id
-    const automationElements = document.querySelectorAll('[data-automation-id]');
+    // Evaluate repeating section containers once
+    const eduContainers = detectRepeatingSectionContainers('educationSection');
+    const workContainers = detectRepeatingSectionContainers('workExperienceSection');
+    const websiteContainers = detectRepeatingSectionContainers('websiteSection');
 
-    automationElements.forEach(container => {
+    // ─── Layer 1: Top-Down Exact Mapping ───
+    const containers = document.querySelectorAll('[data-automation-id]');
+    
+    containers.forEach(container => {
       const automationId = container.getAttribute('data-automation-id');
-      if (!automationId || processed.has(automationId)) return;
+      let exactMappedPath = undefined;
+      
+      // Handle repeating sections
+      if (automationId.startsWith('educationSection_') || automationId.startsWith('workExperienceSection_') || automationId === 'website') {
+        const sectionContainers = automationId.startsWith('educationSection_') ? eduContainers 
+                                : automationId.startsWith('workExperienceSection_') ? workContainers
+                                : websiteContainers;
+                                
+        let index = 0;
+        for (let i = 0; i < sectionContainers.length; i++) {
+          if (sectionContainers[i] === container || sectionContainers[i].contains(container)) {
+            index = i;
+            break;
+          }
+        }
+        
+        const baseMapping = FIELD_MAP[automationId];
+        if (baseMapping !== undefined && baseMapping !== null) {
+          exactMappedPath = baseMapping.replace(/\[0\]/g, `[${index}]`);
+        } else if (baseMapping === null) {
+          exactMappedPath = null;
+        }
+      } else {
+        exactMappedPath = FIELD_MAP[automationId];
+      }
+      
+      if (exactMappedPath !== undefined && exactMappedPath !== null) {
+        // We have a mapping. Resolve the exact input inside this container.
+        const input = resolveWorkdayInput(container, automationId);
+        
+        if (input && OriginFillDetector.isVisible(input) && !input.disabled && !input.readOnly) {
+          if (processedElements.has(input)) {
+             OriginFillLogger.warn(`[OriginFill][Workday][Warning] Multiple automation IDs resolved to the same DOM element. ID: ${automationId}`);
+          } else {
+             processedElements.add(input);
+             mappedAutomationIds.add(automationId);
+             
+             const inputType = determineWorkdayControlType(input, automationId);
+             const label = OriginFillDetector.getInputLabel(input) || automationId;
+             
+             // Diagnostic logging
+             OriginFillLogger.debug(`[OriginFill][Workday][Field]
+automationId: ${automationId}
+label: ${label}
+profilePath: ${exactMappedPath}
+tag: ${input.tagName}
+type: ${input.type || 'N/A'}
+id: ${input.id || 'N/A'}
+name: ${input.name || 'N/A'}`);
 
-      // Get profile path from field map
-      let profilePath = FIELD_MAP[automationId];
-      if (profilePath === null) return; // Explicitly skipped
-      if (profilePath === undefined) return; // Not mapped
-
-      // Replace array index
-      profilePath = profilePath.replace(/\[0\]/g, `[${arrayIndex}]`);
-
-      // Find the actual input within this container
-      const input = findInputInContainer(container);
-      if (!input) return;
-
-      processed.add(automationId);
-
-      results.push({
-        element: input,
-        automationId,
-        profilePath,
-        inputType: OriginFillFieldMapper.getInputType(input)
-      });
+             results.push({
+                element: input,
+                automationId,
+                profilePath: exactMappedPath,
+                inputType,
+                label,
+                fieldType: exactMappedPath.split('.').pop().split('[')[0],
+                confidence: 'high',
+                source: 'workday-exact'
+             });
+          }
+        }
+      }
     });
 
-    // 2. Pierce shadow roots (Workday uses shadow DOM in some components)
+    // ─── Layer 2: Generic Fallback ───
+    const allInputs = document.querySelectorAll(
+      'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]), ' +
+      'select, ' +
+      'textarea, ' +
+      '[contenteditable="true"], ' +
+      '[role="combobox"], ' +
+      '[role="listbox"], ' +
+      '[role="checkbox"], ' +
+      '[role="radio"]'
+    );
+    
+    const candidateInputs = [];
+    allInputs.forEach(el => {
+      if (!processedElements.has(el) && OriginFillDetector.isVisible(el) && !el.disabled && !el.readOnly) {
+        candidateInputs.push(el);
+      }
+    });
+
+    // Add shadow DOM inputs
     const shadowHosts = findShadowHosts();
     shadowHosts.forEach(host => {
       const shadowRoot = host.shadowRoot;
       if (!shadowRoot) return;
-
-      const inputs = shadowRoot.querySelectorAll('input, select, textarea');
-      inputs.forEach(input => {
-        const automationId = input.getAttribute('data-automation-id')
-          || host.getAttribute('data-automation-id');
-
-        if (!automationId || processed.has(automationId)) return;
-
-        let profilePath = FIELD_MAP[automationId];
-        if (!profilePath) return;
-
-        profilePath = profilePath.replace(/\[0\]/g, `[${arrayIndex}]`);
-        processed.add(automationId);
-
-        results.push({
-          element: input,
-          automationId,
-          profilePath,
-          inputType: OriginFillFieldMapper.getInputType(input)
-        });
+      const shadowInputs = shadowRoot.querySelectorAll('input:not([type="hidden"]), select, textarea');
+      shadowInputs.forEach(el => {
+        if (!processedElements.has(el) && OriginFillDetector.isVisible(el) && !el.disabled && !el.readOnly) {
+          candidateInputs.push(el);
+        }
       });
     });
 
-    OriginFillLogger.info(`Workday: Found ${results.length} mapped fields`);
+    candidateInputs.forEach(input => {
+      if (processedElements.has(input)) return;
+      
+      const genericDetection = OriginFillFieldMapper.detectFieldType(input);
+      if (genericDetection && genericDetection.fieldType && genericDetection.profilePath) {
+        if (genericDetection.confidence === 'high' || genericDetection.confidence === 'medium') {
+          processedElements.add(input);
+          
+          let aid = input.getAttribute('data-automation-id') || '';
+          
+          results.push({
+            element: input,
+            automationId: aid,
+            profilePath: genericDetection.profilePath,
+            inputType: determineWorkdayControlType(input, aid) || genericDetection.inputType,
+            label: OriginFillDetector.getInputLabel(input) || aid,
+            fieldType: genericDetection.fieldType,
+            confidence: genericDetection.confidence,
+            source: 'generic-fallback'
+          });
+        }
+      }
+    });
+
+    OriginFillLogger.info(`Workday: Found ${results.length} fields (${results.filter(f => f.source === 'workday-exact').length} exact, ${results.filter(f => f.source === 'generic-fallback').length} fallback)`);
     return results;
   }
 
+  function detectRepeatingSectionContainers(sectionPrefix) {
+    let sectionContainer;
+    
+    // For websites, Workday often just lists them next to each other
+    if (sectionPrefix === 'websiteSection') {
+      const websites = document.querySelectorAll('[data-automation-id="website"]');
+      if (websites.length > 0) {
+        // Return their wrappers
+        return Array.from(websites).map(w => w.closest('[data-automation-id]') || w.parentElement);
+      }
+      return [];
+    }
+
+    // Strategy 1: Look for containers with data-automation-id matching the section
+    sectionContainer = document.querySelector(`[data-automation-id="${sectionPrefix}"]`);
+    if (!sectionContainer) return [];
+
+    // Strategy 2: Look for repeated field groups within the section
+    const firstFieldId = sectionPrefix === 'educationSection'
+      ? 'educationSection_school'
+      : 'workExperienceSection_company';
+
+    const primaryFields = sectionContainer.querySelectorAll(
+      `[data-automation-id="${firstFieldId}"]`
+    );
+
+    if (primaryFields.length <= 1) {
+      return [sectionContainer];
+    }
+
+    const containers = [];
+    primaryFields.forEach(field => {
+      let parent = field.parentElement;
+      for (let i = 0; i < 10 && parent && parent !== sectionContainer; i++) {
+        const siblingFields = parent.querySelectorAll(`[data-automation-id*="${sectionPrefix}_"]`);
+        if (siblingFields.length >= 2) {
+          containers.push(parent);
+          break;
+        }
+        parent = parent.parentElement;
+      }
+      if (containers.length < primaryFields.length && !containers.includes(parent)) {
+        containers.push(field.closest('[data-automation-id]') || field.parentElement);
+      }
+    });
+
+    return containers.length > 0 ? containers : [sectionContainer];
+  }
+
+  // scanContainerFields was removed in favor of unified processing in getFields
+
   /**
-   * Find the actual input element within a Workday container.
-   * Workday wraps inputs in nested divs.
+   * Find the exact target input element within a Workday container.
+   * Uses 5-priority algorithm.
    *
    * @param {HTMLElement} container
+   * @param {string} automationId
    * @returns {HTMLElement|null}
    */
-  function findInputInContainer(container) {
-    // Direct match — container IS the input
+  function resolveWorkdayInput(container, automationId) {
+    // Priority 1: Direct match — container IS the input
     if (['INPUT', 'SELECT', 'TEXTAREA'].includes(container.tagName)) {
       return container;
     }
 
-    // Look for input descendants
-    const input = container.querySelector('input:not([type="hidden"]), select, textarea');
-    if (input) return input;
+    // Priority 2: Input with the EXACT SAME automation-id
+    const sameIdInput = container.querySelector(
+      `input[data-automation-id="${automationId}"]:not([type="hidden"]), select[data-automation-id="${automationId}"], textarea[data-automation-id="${automationId}"]`
+    );
+    if (sameIdInput) return sameIdInput;
 
-    // Contenteditable div
-    const editable = container.querySelector('[contenteditable="true"]');
-    if (editable) return editable;
-
-    // Workday custom dropdown (role="combobox")
+    // Priority 3: Combobox with the matching automation context
     const combobox = container.querySelector('[role="combobox"]');
     if (combobox) return combobox;
 
-    // Workday custom listbox
-    const listbox = container.querySelector('[role="listbox"]');
-    if (listbox) return listbox;
+    // Priority 4: Associated label/ARIA relationship
+    const label = container.querySelector('label[for]');
+    if (label) {
+      const targetId = label.getAttribute('for');
+      if (targetId) {
+        const input = document.getElementById(targetId);
+        // Only return if it's inside this container
+        if (input && container.contains(input)) return input;
+      }
+    }
 
-    // The container itself might be a combobox
-    if (container.getAttribute('role') === 'combobox') return container;
+    // Priority 5: Nearest relevant input inside the wrapper
+    const nearest = container.querySelector('input:not([type="hidden"]), select, textarea, [contenteditable="true"]');
+    return nearest;
+  }
 
-    return null;
+  /**
+   * Determine the specific Workday control type.
+   */
+  function determineWorkdayControlType(element, automationId) {
+    const role = element.getAttribute('role');
+    const aid = (automationId || '').toLowerCase();
+
+    if (aid === 'website' || aid === 'portfolio') {
+      return 'WORKDAY_REPEATING_SECTION';
+    }
+
+    if (aid.includes('skillssection') || aid === 'formfield-skills') {
+      return 'WORKDAY_MULTI_SELECT';
+    }
+
+    // Dropdowns (Degree, State, Country)
+    if (role === 'listbox' || role === 'combobox' || 
+        aid.includes('country') || aid.includes('degree') || aid.includes('state') || aid.includes('source') ||
+        aid.includes('language')) {
+      return 'WORKDAY_SINGLE_SELECT';
+    }
+    
+    // Autocompletes (Field of Study, School)
+    if (aid.includes('fieldofstudy') || aid.includes('schoolname')) {
+      return 'WORKDAY_AUTOCOMPLETE';
+    }
+    
+    // Checkboxes
+    if (role === 'checkbox' || element.type === 'checkbox') {
+      return OriginFillFieldTypes.CHECKBOX;
+    }
+    
+    // Radio
+    if (role === 'radio' || element.type === 'radio') {
+      return OriginFillFieldTypes.RADIO;
+    }
+
+    // Default generic detection
+    return OriginFillFieldMapper.getInputType(element);
   }
 
   /**
@@ -223,45 +493,45 @@ const OriginFillWorkday = (() => {
     if (value === undefined || value === null || value === '') {
       return { success: false, note: 'Empty value' };
     }
-
+    
     try {
+      if (!element) return { success: false, note: 'Element not found' };
+
+      // Ensure visibility
+      if (!OriginFillDetector.isVisible(element)) {
+        // Try scrolling to element
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        await delay(300);
+      }
+
       switch (inputType) {
-        case OriginFillFieldTypes.TEXT:
-        case OriginFillFieldTypes.EMAIL:
-        case OriginFillFieldTypes.PHONE:
-        case OriginFillFieldTypes.URL:
-        case OriginFillFieldTypes.NUMBER:
-          return await fillTextInput(element, String(value));
-
-        case OriginFillFieldTypes.SELECT:
-          return await fillSelect(element, String(value));
-
+        case 'WORKDAY_SINGLE_SELECT':
         case OriginFillFieldTypes.COMBOBOX:
-          return await fillCombobox(element, String(value));
+          return await fillSingleSelect(element, value);
 
-        case OriginFillFieldTypes.TEXTAREA:
-          return await fillTextarea(element, value);
+        case 'WORKDAY_AUTOCOMPLETE':
+          return await fillWorkdayAutocomplete(element, value);
 
-        case OriginFillFieldTypes.RICHTEXT:
-          return await fillRichText(element, value);
+        case 'WORKDAY_MULTI_SELECT':
+          return await fillWorkdaySkills(element, value);
+
+        case 'WORKDAY_REPEATING_SECTION':
+          return await fillRepeatingSection(element, value, element.closest('[data-automation-id]')?.getAttribute('data-automation-id'));
 
         case OriginFillFieldTypes.CHECKBOX:
           return await fillCheckbox(element, value);
 
         case OriginFillFieldTypes.RADIO:
-          return await fillRadio(element, String(value));
-
-        case OriginFillFieldTypes.DATE:
-          return await fillDate(element, String(value));
-
+          return await fillRadio(element, value);
+          
         case OriginFillFieldTypes.FILE:
-          return { success: false, note: 'File upload handled separately' };
+          return { success: true, note: 'File handling deferred to filler' };
 
         default:
-          return await fillTextInput(element, String(value));
+          return await fillTextInput(element, value);
       }
     } catch (err) {
-      OriginFillLogger.error(`Fill error for ${inputType}:`, err);
+      OriginFillLogger.error('Workday fillField error:', err);
       return { success: false, note: err.message };
     }
   }
@@ -269,138 +539,410 @@ const OriginFillWorkday = (() => {
   /**
    * Fill a text input using React-compatible value setting.
    * Uses the property descriptor hack to trigger React state updates.
+   * IMPORTANT: Does NOT dispatch blur — caller controls blur timing.
    *
    * @param {HTMLElement} input
    * @param {string} value
+   * @param {Object} [options]
+   * @param {boolean} [options.dispatchBlur=true] - Whether to dispatch blur event
    * @returns {Promise<{ success: boolean, note: string }>}
    */
-  async function fillTextInput(input, value) {
-    // Focus the element
+  async function fillTextInput(input, value, options = {}) {
+    const dispatchBlur = options.dispatchBlur !== false;
+
     input.focus();
+    input.dispatchEvent(new Event('focus', { bubbles: true }));
     await delay(50);
 
-    // Clear existing value
-    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLInputElement.prototype, 'value'
-    )?.set;
-
-    const nativeTextareaValueSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLTextAreaElement.prototype, 'value'
-    )?.set;
-
-    const setter = input.tagName === 'TEXTAREA' ? nativeTextareaValueSetter : nativeInputValueSetter;
+    const descriptor = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+    const setter = descriptor ? descriptor.set : null;
+    
+    // Clear existing value safely
+    if (setter) setter.call(input, '');
+    else input.value = '';
+    
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await delay(30);
 
     if (setter) {
       setter.call(input, value);
     } else {
       input.value = value;
     }
-
-    // Dispatch events in correct order for React
-    input.dispatchEvent(new Event('focus', { bubbles: true }));
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
-    input.dispatchEvent(new Event('blur', { bubbles: true }));
 
-    // Also dispatch React-specific events
-    const reactEvent = new Event('input', { bubbles: true });
-    Object.defineProperty(reactEvent, 'target', { writable: false, value: input });
-    input.dispatchEvent(reactEvent);
+    // Wait for React to process the state change before blurring
+    await delay(150);
+
+    if (dispatchBlur) {
+      input.dispatchEvent(new Event('blur', { bubbles: true }));
+      await delay(100);
+    }
 
     return { success: true, note: '' };
   }
 
   /**
-   * Fill a native <select> dropdown using fuzzy matching.
-   *
-   * @param {HTMLSelectElement} select
-   * @param {string} value
-   * @returns {Promise<{ success: boolean, note: string }>}
+   * Workday Autocomplete Handler (For Field of Study, School, etc.)
+   * Natively sets text, waits for dropdown options to appear, and selects the match.
+   * Commits the free text if no match is found.
    */
-  async function fillSelect(select, value) {
-    const result = OriginFillFuzzyMatch.matchSelectOptions(value, select);
+  async function fillWorkdayAutocomplete(element, value) {
+    if (!value) return { success: false, note: 'Empty value' };
 
-    if (result.matched) {
-      select.selectedIndex = result.option.index;
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-      select.dispatchEvent(new Event('input', { bubbles: true }));
+    // 1. Focus and use native setter (do not blur yet)
+    await fillTextInput(element, value, { dispatchBlur: false });
 
-      const note = result.strategy !== 'exact'
-        ? `Matched via ${result.strategy}: "${result.option.text}"`
-        : '';
-
-      return {
-        success: true,
-        note
-      };
-    }
-
-    return {
-      success: false,
-      note: `No match found for "${value}" in ${select.options.length} options`
-    };
-  }
-
-  /**
-   * Fill a Workday combobox (custom dropdown component).
-   * Workday comboboxes require clicking, typing, and selecting from a dropdown list.
-   *
-   * @param {HTMLElement} combobox
-   * @param {string} value
-   * @returns {Promise<{ success: boolean, note: string }>}
-   */
-  async function fillCombobox(combobox, value) {
-    // Step 1: Click to open the dropdown
-    combobox.click();
-    await delay(200);
-
-    // Step 2: Find the text input within the combobox
-    const input = combobox.querySelector('input') || combobox;
-
-    // Step 3: Type the value to filter options
-    if (input.tagName === 'INPUT') {
-      await fillTextInput(input, value);
-      await delay(300); // Wait for dropdown options to filter
-    }
-
-    // Step 4: Look for matching options in the dropdown list
-    const listbox = document.querySelector('[role="listbox"]')
-      || document.querySelector('[data-automation-id="selectDropdown"]')
-      || document.querySelector('.css-pqf0yl'); // Workday dropdown class
+    // 2. Wait for Workday suggestions to appear
+    const listbox = await waitForOptions(1500).catch(() => null);
 
     if (listbox) {
-      const options = listbox.querySelectorAll('[role="option"], li');
-      const optionTexts = Array.from(options).map((opt, i) => ({
-        text: opt.textContent.trim(),
-        index: i,
-        element: opt
-      }));
+      // 3. Look for exact or normalized match
+      const options = Array.from(listbox.querySelectorAll('[role="option"], li'));
+      if (options.length > 0) {
+        const searchStr = String(value).toLowerCase().trim();
+        let match = options.find(o => o.textContent.toLowerCase().trim() === searchStr) || 
+                    options.find(o => o.textContent.toLowerCase().includes(searchStr));
 
-      const match = OriginFillFuzzyMatch.bestMatch(value, optionTexts);
-
-      if (match.matched) {
-        // Click the matched option
-        const optionEl = optionTexts[match.option.index].element;
-        optionEl.click();
-        await delay(100);
-
-        return {
-          success: true,
-          note: match.strategy !== 'exact'
-            ? `Matched via ${match.strategy}: "${match.option.text}"`
-            : ''
-        };
+        if (match) {
+          match.click();
+          await delay(200);
+          
+          // Verify
+          const currentValue = element.value || element.textContent;
+          if (!currentValue || currentValue.trim() === '') {
+             return { success: false, note: 'Verification failed: Element is empty after option click' };
+          }
+          return { success: true, note: 'Selected exact/fuzzy match' };
+        }
       }
     }
 
-    // Step 5: Close the dropdown if no match
-    input.dispatchEvent(new Event('blur', { bubbles: true }));
-    document.body.click(); // Close any open dropdowns
+    // 4. No matching option appeared. Commit the free text by dispatching blur
+    element.dispatchEvent(new Event('blur', { bubbles: true }));
+    await delay(200);
 
-    return {
-      success: false,
-      note: `Combobox: no match for "${value}"`
-    };
+    // Verify Workday accepted the free text
+    const finalValue = element.value || element.textContent;
+    if (!finalValue || finalValue.trim() === '') {
+      return { success: false, note: 'Verification failed: Workday rejected the free text input' };
+    }
+
+    return { success: true, note: 'Committed as free text' };
+  }
+
+  /**
+   * Workday Single Select (Dropdown) Handler.
+   * Requires physical click, waiting for pop-up listbox, and clicking the option.
+   */
+  async function fillSingleSelect(element, value) {
+    if (!value) return { success: false, note: 'Empty value' };
+    
+    // Step 1: Open the dropdown
+    element.focus();
+    element.click();
+    await delay(300); // Wait for animation
+
+    // Workday dropdowns often render at the body level
+    const listbox = await waitForOptions();
+    if (!listbox) {
+      // Fallback: maybe it's just a text input that looks like a dropdown
+      if (element.tagName === 'INPUT') {
+        return await fillTextInput(element, value);
+      }
+      return { success: false, note: 'Dropdown options did not appear' };
+    }
+
+    // Step 2: Find best option
+    const options = Array.from(listbox.querySelectorAll('[role="option"], li'));
+    if (options.length === 0) {
+      return { success: false, note: 'No options available' };
+    }
+
+    const searchStr = String(value).toLowerCase();
+    
+    let bestMatch = options.find(opt => opt.textContent.toLowerCase() === searchStr);
+    
+    if (!bestMatch) {
+      bestMatch = options.find(opt => opt.textContent.toLowerCase().includes(searchStr) || searchStr.includes(opt.textContent.toLowerCase()));
+    }
+
+    // Step 3: Select the option
+    if (bestMatch) {
+      bestMatch.click();
+      await delay(300);
+      
+      // Optionally blur if needed
+      if (element.tagName === 'INPUT') {
+        element.dispatchEvent(new Event('blur', { bubbles: true }));
+      }
+
+      // Verify the element's state reflects the change
+      const finalState = element.value || element.textContent || element.innerText || '';
+      if (finalState.toLowerCase().includes('select one') && !searchStr.includes('select one')) {
+        return { success: false, note: 'Verification failed: Control still says Select One' };
+      }
+
+      return { success: true, note: 'Selected exact/fuzzy match' };
+    }
+
+    // Close the dropdown if no match
+    element.dispatchEvent(new Event('blur', { bubbles: true }));
+    return { success: false, note: 'Option not found' };
+  }
+
+  /**
+   * Dedicated Workday Skills Handler.
+   * Uses aggressive character-by-character keyboard simulation to defeat strict React debouncers.
+   */
+  async function fillWorkdaySkills(element, valuesArray) {
+    if (!Array.isArray(valuesArray)) valuesArray = [valuesArray];
+    
+    // BACKWARD COMPATIBILITY & SAFE NORMALIZATION
+    // If old saved profiles contain newlines or colons inside array items, normalize them here.
+    const normalizedRaw = valuesArray.join(',').replace(/[\n\r]+/g, ',').replace(/:\s*/g, ',');
+    const normalizedArray = normalizedRaw.split(',')
+      .map(s => s.trim().replace(/\.+$/, '').trim())
+      .filter(Boolean);
+      
+    if (normalizedArray.length === 0) return { success: false, note: 'No values to fill' };
+
+    OriginFillLogger.info(`[OriginFill][Skills] normalized count: ${normalizedArray.length}`);
+    OriginFillLogger.info(`[OriginFill][Skills] normalized skills:\n${JSON.stringify(normalizedArray, null, 2)}`);
+
+    let successCount = 0;
+    const missingSkills = [];
+    
+    // Nearest formField container to scope chip searches
+    const container = element.closest('div[data-automation-id^="formField"]') || document.body;
+
+    for (let idx = 0; idx < normalizedArray.length; idx++) {
+      const val = normalizedArray[idx];
+      OriginFillLogger.info(`[OriginFill][Skills] Processing ${idx + 1}/${normalizedArray.length}: ${val}`);
+
+      // 1. Focus input
+      element.focus();
+      element.click();
+      await delay(100);
+
+      const descriptor = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+      const setter = descriptor ? descriptor.set : null;
+      
+      // Clear first
+      if (setter) setter.call(element, '');
+      else element.value = '';
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      await delay(100);
+
+      // 2. Character-by-character injection
+      let currentVal = '';
+      for (let i = 0; i < val.length; i++) {
+        const char = val[i];
+        currentVal += char;
+        
+        // Dispatch keydown
+        element.dispatchEvent(new KeyboardEvent('keydown', { key: char, code: `Key${char.toUpperCase()}`, bubbles: true }));
+        element.dispatchEvent(new KeyboardEvent('keypress', { key: char, code: `Key${char.toUpperCase()}`, bubbles: true }));
+        
+        // Set value natively
+        if (setter) setter.call(element, currentVal);
+        else element.value = currentVal;
+        
+        // Dispatch input and change
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+        
+        // Dispatch keyup
+        element.dispatchEvent(new KeyboardEvent('keyup', { key: char, code: `Key${char.toUpperCase()}`, bubbles: true }));
+        
+        await delay(50); // Small delay between keystrokes to mimic human typing
+      }
+      
+      await delay(800); // Wait for potential suggestions to load
+
+      // 3. Trigger KeyboardEvents (Enter to commit)
+      element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      element.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      element.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+
+      await delay(500); // Wait for Workday to create the token chip
+
+      // 4. Verify Chip
+      let chipFound = false;
+      const chips = Array.from(container.querySelectorAll('li, [role="button"], [data-automation-id*="promptOption"]'));
+      if (chips.some(c => c.textContent.toLowerCase().includes(val.toLowerCase()))) {
+        chipFound = true;
+      }
+
+      if (chipFound) {
+        successCount++;
+      } else {
+        // Fallback: search globally for active dropdown and click option
+        const listbox = document.querySelector('[role="listbox"], [role="menu"], [data-automation-id="selectDropdown"], [class*="popup"]');
+        if (listbox) {
+          const options = Array.from(listbox.querySelectorAll('[role="option"], li, button, div[data-automation-id*="option"]'));
+          const searchStr = String(val).toLowerCase();
+          
+          let match = options.find(o => o.textContent.toLowerCase().trim() === searchStr) || 
+                      options.find(o => o.textContent.toLowerCase().includes(searchStr));
+                      
+          if (match) {
+            match.click();
+            await delay(500);
+            
+            // Re-verify
+            const fallbackChips = Array.from(container.querySelectorAll('li, [role="button"], [data-automation-id*="promptOption"]'));
+            if (fallbackChips.some(c => c.textContent.toLowerCase().includes(val.toLowerCase()))) {
+              chipFound = true;
+              successCount++;
+            }
+          }
+        }
+      }
+
+      if (!chipFound) {
+        OriginFillLogger.debug(`[OriginFill][Workday] Skill chip not created for: ${val}`);
+        missingSkills.push(val);
+      }
+      
+      // 5. Clear input for next skill
+      if (setter) setter.call(element, '');
+      else element.value = '';
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      await delay(150);
+    }
+    
+    element.dispatchEvent(new Event('blur', { bubbles: true }));
+    
+    if (successCount === 0) return { success: false, note: 'No matching skills found' };
+    if (missingSkills.length > 0) return { success: false, note: `Filled ${successCount}/${normalizedArray.length}. Missing: ${missingSkills.join(', ')}` };
+    return { success: true, note: '' };
+  }
+
+  /**
+   * Workday Multi Select Handler (e.g., Generic).
+   */
+  async function fillMultiSelect(element, valuesArray) {
+    if (!Array.isArray(valuesArray)) valuesArray = [valuesArray];
+    if (valuesArray.length === 0) return { success: false, note: 'No values to fill' };
+
+    let successCount = 0;
+    const missingSkills = [];
+    
+    for (const val of valuesArray) {
+      if (!val) continue;
+
+      // 1. Click to focus
+      element.focus();
+      element.click();
+      await delay(100);
+
+      // 2. Type the value to filter options
+      await fillTextInput(element, val, { dispatchBlur: false });
+      
+      // 3. Wait for options list to render and filter
+      const listbox = await waitForOptions(1000).catch(() => null);
+      
+      if (listbox) {
+        // Look for exact/fuzzy match or "No Items" indicator
+        const options = Array.from(listbox.querySelectorAll('[role="option"], li'));
+        const noItems = listbox.textContent.toLowerCase().includes('no items');
+        
+        if (!noItems && options.length > 0) {
+          const searchStr = String(val).toLowerCase();
+          let match = options.find(o => o.textContent.toLowerCase() === searchStr) || 
+                      options.find(o => o.textContent.toLowerCase().includes(searchStr));
+                      
+          if (match) {
+            match.click();
+            successCount++;
+            
+            // Wait for the token chip to render in the DOM
+            await delay(300);
+            continue;
+          }
+        }
+      }
+      
+      // If we reach here, we didn't find the option or "No Items" was shown
+      OriginFillLogger.debug(`[OriginFill][Workday] Multi-select option not found for: ${val}`);
+      missingSkills.push(val);
+      
+      // Clear the input so it doesn't block the next iteration
+      await fillTextInput(element, '', { dispatchBlur: false });
+      await delay(100);
+    }
+    
+    element.dispatchEvent(new Event('blur', { bubbles: true }));
+    
+    if (successCount === 0) return { success: false, note: 'No matching skills found' };
+    if (missingSkills.length > 0) return { success: false, note: `Filled ${successCount}/${valuesArray.length}. Missing: ${missingSkills.join(', ')}` };
+    return { success: true, note: '' };
+  }
+
+  /**
+   * Workday Repeating Section Handler (e.g., Websites, Portfolios).
+   */
+  async function fillRepeatingSection(element, valuesArray, automationId) {
+    if (!Array.isArray(valuesArray)) valuesArray = [valuesArray];
+    if (valuesArray.length === 0) return { success: false, note: 'No URLs provided' };
+
+    let successCount = 0;
+    let currentElement = element;
+    
+    // Find the container section (e.g. Website section)
+    const sectionContainer = element.closest('[data-automation-id="websiteSection"]') || 
+                             element.closest('ul') || 
+                             element.closest('div[role="group"]');
+
+    for (let i = 0; i < valuesArray.length; i++) {
+      const urlInfo = valuesArray[i];
+      const url = typeof urlInfo === 'object' ? urlInfo.url : urlInfo;
+      
+      if (!url) continue;
+
+      // Fill current input
+      if (currentElement) {
+        await fillTextInput(currentElement, url);
+        successCount++;
+      } else {
+        break; // Nowhere to fill
+      }
+      
+      if (i < valuesArray.length - 1) {
+        // Need to add another row
+        // 1. Find the "Add" button
+        const addBtn = document.querySelector('[data-automation-id="Add"]') ||
+                       document.querySelector('[aria-label*="Add Website"]') ||
+                       document.querySelector('[aria-label*="Add Portfolio"]');
+                       
+        if (!addBtn) {
+          OriginFillLogger.debug('[OriginFill][Workday] Could not find "Add Another" button for repeating section.');
+          break;
+        }
+        
+        // 2. Click Add
+        addBtn.click();
+        
+        // 3. Wait for new DOM input to appear
+        let foundNewInput = false;
+        for (let tries = 0; tries < 15; tries++) {
+          await delay(200);
+          const allInputs = sectionContainer ? sectionContainer.querySelectorAll('input') : document.querySelectorAll('[data-automation-id="website"] input, [data-automation-id="portfolio"] input');
+          if (allInputs.length > i + 1) {
+            currentElement = allInputs[allInputs.length - 1]; // Grab the latest one
+            foundNewInput = true;
+            break;
+          }
+        }
+        
+        if (!foundNewInput) break;
+      }
+    }
+    
+    if (successCount === 0) return { success: false, note: 'Failed to fill repeating section' };
+    return { success: true, note: `Filled ${successCount}/${valuesArray.length} items` };
   }
 
   /**
@@ -445,32 +987,77 @@ const OriginFillWorkday = (() => {
     element.dispatchEvent(new Event('input', { bubbles: true }));
     element.dispatchEvent(new Event('change', { bubbles: true }));
 
-    return { success: true, note: 'Rich text' };
+    // Verify
+    const hasContent = element.textContent.trim().length > 0;
+    return { success: hasContent, note: hasContent ? 'Rich text' : 'Rich text content empty after fill' };
   }
 
   /**
-   * Fill a checkbox.
+   * Fill a checkbox — handles both native and Workday custom checkboxes.
    * @param {HTMLElement} checkbox
    * @param {boolean} value
    * @returns {Promise<{ success: boolean, note: string }>}
    */
   async function fillCheckbox(checkbox, value) {
-    const shouldBeChecked = value === true || value === 'true' || value === 'yes';
+    const shouldBeChecked = value === true || value === 'true' || value === 'yes' || value === 'Yes';
+
+    // Handle Workday custom checkbox (div with role="checkbox")
+    if (checkbox.getAttribute('role') === 'checkbox') {
+      const currentlyChecked = checkbox.getAttribute('aria-checked') === 'true';
+      if (currentlyChecked !== shouldBeChecked) {
+        checkbox.click();
+        await delay(100);
+      }
+      // Verify
+      const finalState = checkbox.getAttribute('aria-checked') === 'true';
+      return {
+        success: finalState === shouldBeChecked,
+        note: finalState !== shouldBeChecked ? 'Custom checkbox state mismatch' : ''
+      };
+    }
+
+    // Native checkbox
     if (checkbox.checked !== shouldBeChecked) {
       checkbox.click();
       await delay(50);
     }
-    return { success: true, note: '' };
+
+    // Verify
+    return {
+      success: checkbox.checked === shouldBeChecked,
+      note: checkbox.checked !== shouldBeChecked ? 'Checkbox state mismatch after click' : ''
+    };
   }
 
   /**
    * Fill a radio button by matching label text.
+   * Handles both native and Workday custom radio groups.
+   *
    * @param {HTMLElement} radio
    * @param {string} value
    * @returns {Promise<{ success: boolean, note: string }>}
    */
   async function fillRadio(radio, value) {
-    // Find all radios in same group
+    // Handle Workday custom radio (div with role="radio" or role="radiogroup")
+    const radioGroup = radio.closest('[role="radiogroup"]') || radio.parentElement;
+    if (radioGroup) {
+      const customRadios = radioGroup.querySelectorAll('[role="radio"]');
+      if (customRadios.length > 0) {
+        for (const r of customRadios) {
+          const label = r.textContent.trim() || r.getAttribute('aria-label') || '';
+          if (label.toLowerCase().includes(value.toLowerCase())) {
+            r.click();
+            await delay(100);
+            // Verify
+            const checked = r.getAttribute('aria-checked') === 'true';
+            return { success: checked, note: checked ? '' : 'Custom radio selection not confirmed' };
+          }
+        }
+        return { success: false, note: `No custom radio option matches "${value}"` };
+      }
+    }
+
+    // Native radio buttons
     const name = radio.name;
     if (!name) return { success: false, note: 'Radio without name attribute' };
 
@@ -481,7 +1068,8 @@ const OriginFillWorkday = (() => {
       if (label.toLowerCase().includes(value.toLowerCase())) {
         r.click();
         r.dispatchEvent(new Event('change', { bubbles: true }));
-        return { success: true, note: '' };
+        await delay(50);
+        return { success: r.checked, note: r.checked ? '' : 'Radio not checked after click' };
       }
     }
 
@@ -489,42 +1077,139 @@ const OriginFillWorkday = (() => {
   }
 
   /**
-   * Fill a date field. Detects format and adapts.
+   * Fill a date field with robust normalization.
+   * Handles multiple input/output date formats.
+   *
    * @param {HTMLElement} input
-   * @param {string} value - Date in YYYY-MM-DD or similar format
+   * @param {string} value - Date in various formats
    * @returns {Promise<{ success: boolean, note: string }>}
    */
   async function fillDate(input, value) {
-    // Detect expected format from placeholder or existing value
-    const placeholder = (input.placeholder || '').toUpperCase();
-    let formatted = value;
+    const formatted = normalizeDate(value, input);
+    if (!formatted) {
+      return { success: false, note: `Could not normalize date: "${value}"` };
+    }
+    return fillTextInput(input, formatted);
+  }
 
-    if (placeholder.includes('MM/DD/YYYY') || placeholder.includes('MM-DD-YYYY')) {
-      // Convert YYYY-MM-DD to MM/DD/YYYY
-      const parts = value.split(/[-/]/);
-      if (parts.length === 3 && parts[0].length === 4) {
-        formatted = `${parts[1]}/${parts[2]}/${parts[0]}`;
-      }
-    } else if (placeholder.includes('DD/MM/YYYY')) {
-      const parts = value.split(/[-/]/);
-      if (parts.length === 3 && parts[0].length === 4) {
-        formatted = `${parts[2]}/${parts[1]}/${parts[0]}`;
+  /**
+   * Normalize a date value to the format expected by an input element.
+   *
+   * @param {string} value - Profile date (YYYY-MM-DD, MM/DD/YYYY, YYYY-MM, June 2024, etc.)
+   * @param {HTMLElement} input - The target input element
+   * @returns {string|null} Formatted date string, or null if parsing failed
+   */
+  function normalizeDate(value, input) {
+    if (!value) return null;
+
+    // Parse the input date into components
+    let year, month, day;
+
+    // Format: YYYY-MM-DD or YYYY/MM/DD
+    let match = value.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+    if (match) {
+      year = match[1]; month = match[2]; day = match[3];
+    }
+
+    // Format: MM/DD/YYYY or MM-DD-YYYY
+    if (!year) {
+      match = value.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+      if (match) {
+        month = match[1]; day = match[2]; year = match[3];
       }
     }
 
-    // For type="date" inputs, always use YYYY-MM-DD
-    if (input.type === 'date') {
-      const parts = value.split(/[-/]/);
-      if (parts.length === 3) {
-        if (parts[0].length === 4) {
-          formatted = `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
-        } else if (parts[2].length === 4) {
-          formatted = `${parts[2]}-${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}`;
+    // Format: YYYY-MM (no day)
+    if (!year) {
+      match = value.match(/^(\d{4})[-/](\d{1,2})$/);
+      if (match) {
+        year = match[1]; month = match[2]; day = null;
+      }
+    }
+
+    // Format: MM/YYYY (no day)
+    if (!year) {
+      match = value.match(/^(\d{1,2})[-/](\d{4})$/);
+      if (match) {
+        month = match[1]; year = match[2]; day = null;
+      }
+    }
+
+    // Format: "June 2024" or "Jun 2024"
+    if (!year) {
+      const monthNames = {
+        'january': '01', 'february': '02', 'march': '03', 'april': '04',
+        'may': '05', 'june': '06', 'july': '07', 'august': '08',
+        'september': '09', 'october': '10', 'november': '11', 'december': '12',
+        'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04',
+        'jun': '06', 'jul': '07', 'aug': '08', 'sep': '09',
+        'oct': '10', 'nov': '11', 'dec': '12'
+      };
+      match = value.match(/^(\w+)\s+(\d{4})$/);
+      if (match) {
+        const monthStr = match[1].toLowerCase();
+        if (monthNames[monthStr]) {
+          month = monthNames[monthStr]; year = match[2]; day = null;
         }
       }
     }
 
-    return fillTextInput(input, formatted);
+    // Format: just a year "2024"
+    if (!year) {
+      match = value.match(/^(\d{4})$/);
+      if (match) {
+        year = match[1]; month = null; day = null;
+      }
+    }
+
+    if (!year) return value; // Return original if we can't parse
+
+    // Pad month and day
+    if (month) month = month.padStart(2, '0');
+    if (day) day = day.padStart(2, '0');
+
+    // Determine expected output format from the input element
+    const placeholder = (input.placeholder || '').toUpperCase();
+
+    // For type="date" inputs, always use YYYY-MM-DD
+    if (input.type === 'date') {
+      if (!day) day = '01'; // Default day for month-only dates
+      return `${year}-${month || '01'}-${day}`;
+    }
+
+    // For type="month" inputs, use YYYY-MM
+    if (input.type === 'month') {
+      return `${year}-${month || '01'}`;
+    }
+
+    // Detect from placeholder
+    if (placeholder.includes('MM/DD/YYYY') || placeholder.includes('MM-DD-YYYY')) {
+      if (!day) day = '01';
+      return `${month || '01'}/${day}/${year}`;
+    }
+    if (placeholder.includes('DD/MM/YYYY')) {
+      if (!day) day = '01';
+      return `${day}/${month || '01'}/${year}`;
+    }
+    if (placeholder.includes('YYYY-MM-DD')) {
+      if (!day) day = '01';
+      return `${year}-${month || '01'}-${day}`;
+    }
+    if (placeholder.includes('MM/YYYY')) {
+      return `${month || '01'}/${year}`;
+    }
+    if (placeholder.includes('YYYY')) {
+      return year;
+    }
+
+    // Default: MM/DD/YYYY (US format, common in Workday)
+    if (month && day) {
+      return `${month}/${day}/${year}`;
+    }
+    if (month) {
+      return `${month}/${year}`;
+    }
+    return year;
   }
 
   /**
@@ -541,13 +1226,14 @@ const OriginFillWorkday = (() => {
     FIELD_MAP,
     getFields,
     fillField,
-    findInputInContainer,
     findShadowHosts,
+    normalizeDate,
+    waitForElement,
+    waitForOptions,
+    waitForValue,
 
     // Individual fill methods (for direct use/testing)
     fillTextInput,
-    fillSelect,
-    fillCombobox,
     fillTextarea,
     fillRichText,
     fillCheckbox,

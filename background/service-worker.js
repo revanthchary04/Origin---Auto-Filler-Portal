@@ -20,6 +20,7 @@ const SW_StorageKeys = Object.freeze({
 const SW_Messages = Object.freeze({
   GET_PORTAL_INFO: 'GET_PORTAL_INFO',
   PORTAL_DETECTED: 'PORTAL_DETECTED',
+  DETECT_ON_DEMAND: 'DETECT_ON_DEMAND',
   FILL_ALL: 'FILL_ALL',
   FILL_SECTION: 'FILL_SECTION',
   FILL_PROGRESS: 'FILL_PROGRESS',
@@ -158,6 +159,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       return true; // Async response
 
+    case SW_Messages.DETECT_ON_DEMAND:
+      // Run generic detection on the active tab
+      getActiveTabId().then(activeTabId => {
+        if (activeTabId) {
+          executeOnDemandDetection(activeTabId).then(result => {
+            if (result && result.type !== 'none') {
+              // Update activeTabs tracking for the newly detected portal
+              activeTabs.set(activeTabId, {
+                portalType: result.type,
+                url: result.url || '',
+                confidence: result.confidence,
+                pageName: result.pageName || '',
+                detectedAt: Date.now()
+              });
+              updateBadge(activeTabId, result.type);
+            }
+            sendResponse(result);
+          }).catch(err => {
+            sendResponse({ type: 'none', confidence: 'none', error: err.message });
+          });
+        } else {
+          sendResponse({ type: 'none', confidence: 'none', error: 'No active tab' });
+        }
+      });
+      return true; // Async response
+
     // ─── Fill Events ─────────────────────
     case SW_Messages.FILL_PROGRESS:
       lastFillReport = null; // Clear previous
@@ -196,12 +223,61 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
 
     case SW_Messages.SESSION_RESTORE:
-      // Forward restore request to content script
-      forwardToTab(tabId || data.tabId, {
-        type: SW_Messages.SESSION_RESTORE,
-        data
-      });
-      break;
+      // Forward restore request to content script after a ping validation
+      const targetTabId = tabId || data?.tabId;
+      if (!targetTabId) {
+        sendResponse({ success: false, error: 'No active tab' });
+        return true;
+      }
+      
+      (async () => {
+        try {
+          const tab = await chrome.tabs.get(targetTabId);
+          const url = tab.url || '';
+          
+          if (isRestrictedUrl(url)) {
+            sendResponse({ success: false, error: 'Cannot restore on this page.' });
+            return;
+          }
+
+          // Try to ping first
+          let isAlive = false;
+          try {
+            const pingResponse = await chrome.tabs.sendMessage(targetTabId, { type: SW_Messages.PING });
+            if (pingResponse) isAlive = true;
+          } catch (e) {
+            isAlive = false;
+          }
+
+          if (!isAlive) {
+            // Inject runtime if it's dead
+            await executeOnDemandDetection(targetTabId);
+            // Ping again
+            try {
+              const retryPing = await chrome.tabs.sendMessage(targetTabId, { type: SW_Messages.PING });
+              if (retryPing) isAlive = true;
+            } catch (e) {
+              isAlive = false;
+            }
+          }
+
+          if (!isAlive) {
+            activeTabs.delete(targetTabId);
+            updateBadge(targetTabId, null);
+            sendResponse({ success: false, error: 'Content script unavailable' });
+            return;
+          }
+
+          chrome.tabs.sendMessage(targetTabId, {
+            type: SW_Messages.SESSION_RESTORE,
+            data
+          });
+          sendResponse({ success: true });
+        } catch (err) {
+          sendResponse({ success: false, error: err.message });
+        }
+      })();
+      return true; // Async response
 
     // ─── Stats Update ────────────────────
     case SW_Messages.STATS_UPDATED:
@@ -329,14 +405,18 @@ async function showNotification(data) {
 
   const notificationId = 'originfill_' + Date.now();
 
-  chrome.notifications.create(notificationId, {
-    type: 'basic',
-    iconUrl: 'assets/icons/icon128.png',
-    title: data.title || 'OriginFill',
-    message: data.message || '',
-    priority: 2,
-    requireInteraction: true // Keep notification visible until dismissed
-  });
+  try {
+    chrome.notifications.create(notificationId, {
+      type: 'basic',
+      iconUrl: '/assets/icons/icon128.png', // Must be absolute path from extension root
+      title: data.title || 'OriginFill',
+      message: data.message || '',
+      priority: 2,
+      requireInteraction: true // Keep notification visible until dismissed
+    });
+  } catch (error) {
+    console.warn('[OriginFill] Notification failed to create (could not download image or permissions issue):', error.message);
+  }
 
   // Handle notification click — open the application URL
   if (data.url) {
@@ -381,6 +461,22 @@ async function handleSessionTimeout(data, tabId) {
 // ─── On-Demand Generic Detection ─────────────────────────────────
 
 /**
+ * Helper to determine if a URL is restricted from script injection.
+ * @param {string} url 
+ * @returns {boolean}
+ */
+function isRestrictedUrl(url) {
+  if (!url) return true;
+  return url.startsWith('chrome://') || 
+         url.startsWith('chrome-extension://') || 
+         url.startsWith('edge://') || 
+         url.startsWith('about:') || 
+         url.startsWith('devtools://') || 
+         url.startsWith('view-source:') ||
+         url.startsWith('file://');
+}
+
+/**
  * Execute generic portal detection on a tab that's not in our known domains.
  * Uses chrome.scripting.executeScript for on-demand injection.
  *
@@ -389,18 +485,46 @@ async function handleSessionTimeout(data, tabId) {
  */
 async function executeOnDemandDetection(tabId) {
   try {
-    const results = await chrome.scripting.executeScript({
+    const tab = await chrome.tabs.get(tabId);
+    const url = tab.url || '';
+    
+    if (isRestrictedUrl(url)) {
+      console.log(`[OriginFill][SW] Restricted URL detected: ${url}`);
+      return { type: 'none', confidence: 'none', url, reason: 'restricted_url' };
+    }
+
+    // 1. Check if scripts are already injected
+    const checkInjection = await chrome.scripting.executeScript({
       target: { tabId },
-      files: [
-        'utils/constants.js',
-        'utils/logger.js',
-        'utils/fuzzy-match.js',
-        'utils/field-mapper.js',
-        'content/portals/workday.js',
-        'content/portals/generic.js',
-        'content/detector.js'
-      ]
+      func: () => typeof window.__originfillRuntime !== 'undefined'
     });
+
+    const isInitialized = checkInjection[0]?.result === true;
+
+    // 2. Inject full dependency chain only if not initialized
+    if (!isInitialized) {
+      console.log(`[OriginFill][SW] Injecting runtime into tab ${tabId}`);
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: [
+          'utils/constants.js',
+          'utils/logger.js',
+          'utils/fuzzy-match.js',
+          'utils/field-mapper.js',
+          'storage/encryption.js',
+          'storage/store.js',
+          'content/portals/workday.js',
+          'content/portals/generic.js',
+          'content/detector.js',
+          'content/filler.js',
+          'content/observer.js',
+          'content/session-guard.js',
+          'content/init.js'
+        ]
+      });
+    } else {
+      console.log(`[OriginFill][SW] Runtime already initialized on tab ${tabId}`);
+    }
 
     // Now run detection
     const detectionResults = await chrome.scripting.executeScript({
@@ -452,20 +576,62 @@ async function getActiveTabInfo() {
 
   // Check tracked tabs first
   if (activeTabs.has(tabId)) {
-    return {
-      ...activeTabs.get(tabId),
-      lastFillReport: lastFillReport,
-      lastPageInfo: lastPageInfo
-    };
+    return new Promise((resolve) => {
+      chrome.tabs.sendMessage(tabId, { type: SW_Messages.PING }, (pingResponse) => {
+        if (chrome.runtime.lastError || !pingResponse) {
+          // Stale tab — clean up and fall through to undetected state
+          activeTabs.delete(tabId);
+          updateBadge(tabId, null);
+          resolve({
+            portalType: SW_Portals.NONE,
+            tabId,
+            lastFillReport: null,
+            lastPageInfo: null
+          });
+        } else {
+          resolve({
+            ...activeTabs.get(tabId),
+            lastFillReport: lastFillReport,
+            lastPageInfo: lastPageInfo
+          });
+        }
+      });
+    });
   }
 
-  // Not tracked — might need on-demand detection
-  return {
-    portalType: SW_Portals.NONE,
-    tabId,
-    lastFillReport: null,
-    lastPageInfo: null
-  };
+  // Not tracked — attempt on-demand detection if valid tab
+  return new Promise(async (resolve) => {
+    try {
+      const result = await executeOnDemandDetection(tabId);
+      if (result && result.type && result.type !== SW_Portals.NONE) {
+        // Now it's tracked
+        activeTabs.set(tabId, {
+          portalType: result.type,
+          url: result.url || '',
+          confidence: result.confidence,
+          pageName: result.pageName || '',
+          detectedAt: Date.now()
+        });
+        updateBadge(tabId, result.type);
+        
+        resolve({
+          ...activeTabs.get(tabId),
+          lastFillReport: null,
+          lastPageInfo: null
+        });
+        return;
+      }
+    } catch (err) {
+      // Ignore
+    }
+
+    resolve({
+      portalType: SW_Portals.NONE,
+      tabId,
+      lastFillReport: null,
+      lastPageInfo: null
+    });
+  });
 }
 
 /**
