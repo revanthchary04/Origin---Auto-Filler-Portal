@@ -325,23 +325,42 @@ const OriginFillSessionGuard = (() => {
     try {
       const snapshot = OriginFillFiller.captureFieldSnapshot();
       if (Object.keys(snapshot).length > 0) {
-        // Use synchronous approach — store in localStorage as backup
-        const data = {
+        const fullData = {
           lastUrl: window.location.href,
           lastPortal: _portalType,
           savedFields: snapshot,
           savedAt: new Date().toISOString()
         };
 
+        // SECURITY FIX: localStorage backup stores ONLY field identifiers, NOT values.
+        // This prevents personal data from being left in plaintext localStorage.
         try {
-          localStorage.setItem('originfill_emergency_snapshot', JSON.stringify(data));
+          const safeSnapshot = {};
+          for (const [key, fieldData] of Object.entries(snapshot)) {
+            safeSnapshot[key] = {
+              type: fieldData.type,
+              label: fieldData.label,
+              index: fieldData.index
+              // Intentionally omitting: value
+            };
+          }
+
+          const safeData = {
+            lastUrl: window.location.href,
+            lastPortal: _portalType,
+            savedFields: safeSnapshot,
+            savedAt: fullData.savedAt,
+            partial: true // Flag indicating values are missing
+          };
+
+          localStorage.setItem('originfill_emergency_snapshot', JSON.stringify(safeData));
         } catch (e) {
           // localStorage might not be available
         }
 
-        // Also try async storage (may not complete before unload)
+        // Full snapshot via async chrome.storage (may not complete before unload)
         chrome.storage.local.set({
-          [OriginFillStorageKeys.SESSION_RECOVERY]: data
+          [OriginFillStorageKeys.SESSION_RECOVERY]: fullData
         });
       }
     } catch (err) {

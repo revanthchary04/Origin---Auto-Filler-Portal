@@ -2,6 +2,7 @@
  * OriginFill — Multi-Page Form Observer
  * Watches for SPA navigation and new form sections appearing.
  * Detects page transitions in Workday's multi-step application flow.
+ * Intercepts pushState/replaceState/popstate/hashchange for reliable SPA tracking.
  *
  * @license AGPL-3.0
  * @author CharyWorld
@@ -22,6 +23,9 @@ const OriginFillObserver = (() => {
   /** @type {string} Last URL hash */
   let _lastHash = '';
 
+  /** @type {string} Last full URL */
+  let _lastUrl = '';
+
   /** @type {number} Last known form field count */
   let _lastFieldCount = 0;
 
@@ -30,6 +34,17 @@ const OriginFillObserver = (() => {
 
   /** @type {Object} Track fill state per page */
   let _pageStates = {};
+
+  /** @type {Object} Stored options reference for dynamic updates */
+  let _options = {
+    onPageChange: () => {},
+    autoFillOnChange: false,
+    profile: null,
+    portalType: OriginFillPortals.GENERIC
+  };
+
+  /** @type {boolean} Whether history interceptors are installed */
+  let _historyIntercepted = false;
 
   // ─── Observer Setup ────────────────────────────────────────────
 
@@ -48,25 +63,27 @@ const OriginFillObserver = (() => {
       return;
     }
 
-    const {
-      onPageChange = () => {},
-      autoFillOnChange = false,
-      profile = null,
-      portalType = OriginFillPortals.GENERIC
-    } = options;
+    _options = {
+      onPageChange: options.onPageChange || (() => {}),
+      autoFillOnChange: options.autoFillOnChange || false,
+      profile: options.profile || null,
+      portalType: options.portalType || OriginFillPortals.GENERIC
+    };
 
     // Record initial state
     _lastHash = window.location.hash;
-    _lastPageName = detectCurrentPage(portalType);
+    _lastUrl = window.location.href;
+    _lastPageName = detectCurrentPage(_options.portalType);
     _lastFieldCount = countFormFields();
 
     // Listen for URL hash changes
     window.addEventListener('hashchange', handleHashChange);
 
-    // Listen for popstate (SPA history navigation)
-    window.addEventListener('popstate', () => {
-      handlePageTransition(onPageChange, autoFillOnChange, profile, portalType);
-    });
+    // Listen for popstate (SPA back/forward navigation)
+    window.addEventListener('popstate', handlePopState);
+
+    // Intercept pushState and replaceState for SPA navigation
+    interceptHistoryMethods();
 
     // Set up MutationObserver
     _observer = new MutationObserver((mutations) => {
@@ -76,7 +93,7 @@ const OriginFillObserver = (() => {
       }
 
       _debounceTimer = setTimeout(() => {
-        handleDOMMutation(mutations, onPageChange, autoFillOnChange, profile, portalType);
+        handleDOMMutation(mutations);
       }, OriginFillTiming.OBSERVER_DEBOUNCE);
     });
 
@@ -93,8 +110,8 @@ const OriginFillObserver = (() => {
     // Send initial page info
     sendMessage(OriginFillMessages.PAGE_CHANGED, {
       pageName: _lastPageName,
-      pageNumber: getPageNumber(portalType),
-      totalPages: getTotalPages(portalType),
+      pageNumber: getPageNumber(_options.portalType),
+      totalPages: getTotalPages(_options.portalType),
       fieldCount: _lastFieldCount
     });
   }
@@ -114,35 +131,114 @@ const OriginFillObserver = (() => {
     }
 
     window.removeEventListener('hashchange', handleHashChange);
+    window.removeEventListener('popstate', handlePopState);
+
+    // Restore original history methods
+    restoreHistoryMethods();
 
     _active = false;
     OriginFillLogger.info('Multi-page observer stopped');
+  }
+
+  // ─── History Interception ──────────────────────────────────────
+
+  /** @type {Function|null} Original pushState */
+  let _origPushState = null;
+
+  /** @type {Function|null} Original replaceState */
+  let _origReplaceState = null;
+
+  /**
+   * Intercept history.pushState and history.replaceState to detect SPA navigation.
+   * This is necessary because popstate only fires on back/forward, not on programmatic pushState.
+   */
+  function interceptHistoryMethods() {
+    if (_historyIntercepted) return;
+
+    _origPushState = history.pushState;
+    _origReplaceState = history.replaceState;
+
+    history.pushState = function(...args) {
+      _origPushState.apply(this, args);
+      onHistoryChange('pushState');
+    };
+
+    history.replaceState = function(...args) {
+      _origReplaceState.apply(this, args);
+      onHistoryChange('replaceState');
+    };
+
+    _historyIntercepted = true;
+    OriginFillLogger.debug('History methods intercepted');
+  }
+
+  /**
+   * Restore original history methods on stop.
+   */
+  function restoreHistoryMethods() {
+    if (!_historyIntercepted) return;
+
+    if (_origPushState) {
+      history.pushState = _origPushState;
+      _origPushState = null;
+    }
+    if (_origReplaceState) {
+      history.replaceState = _origReplaceState;
+      _origReplaceState = null;
+    }
+
+    _historyIntercepted = false;
+    OriginFillLogger.debug('History methods restored');
+  }
+
+  /**
+   * Called when pushState or replaceState is invoked.
+   * @param {string} source - 'pushState' or 'replaceState'
+   */
+  function onHistoryChange(source) {
+    const newUrl = window.location.href;
+    if (newUrl !== _lastUrl) {
+      OriginFillLogger.debug(`${source} detected: ${_lastUrl} → ${newUrl}`);
+      _lastUrl = newUrl;
+      _lastHash = window.location.hash;
+
+      // Delay slightly to let DOM update after history change
+      setTimeout(() => {
+        triggerPageTransition();
+      }, 200);
+    }
   }
 
   // ─── Change Detection Handlers ─────────────────────────────────
 
   /**
    * Handle URL hash changes (Workday uses #step=N patterns).
+   * Fixed: Now calls handlePageTransition directly instead of being a no-op.
    */
   function handleHashChange() {
     const newHash = window.location.hash;
     if (newHash !== _lastHash) {
       OriginFillLogger.debug(`Hash changed: ${_lastHash} → ${newHash}`);
       _lastHash = newHash;
-      // Will be picked up by the mutation observer or directly
+      _lastUrl = window.location.href;
+      triggerPageTransition();
     }
   }
 
   /**
-   * Handle DOM mutations that might indicate a page change.
-   *
-   * @param {MutationRecord[]} mutations
-   * @param {Function} onPageChange
-   * @param {boolean} autoFillOnChange
-   * @param {Object} profile
-   * @param {string} portalType
+   * Handle popstate events (browser back/forward).
    */
-  function handleDOMMutation(mutations, onPageChange, autoFillOnChange, profile, portalType) {
+  function handlePopState() {
+    _lastUrl = window.location.href;
+    _lastHash = window.location.hash;
+    triggerPageTransition();
+  }
+
+  /**
+   * Handle DOM mutations that might indicate a page change.
+   * @param {MutationRecord[]} mutations
+   */
+  function handleDOMMutation(mutations) {
     // Check if significant DOM changes occurred
     let significantChange = false;
 
@@ -170,8 +266,21 @@ const OriginFillObserver = (() => {
     }
 
     if (significantChange) {
-      handlePageTransition(onPageChange, autoFillOnChange, profile, portalType);
+      triggerPageTransition();
     }
+  }
+
+  /**
+   * Trigger a page transition check using current options.
+   * Centralized handler that all navigation events funnel through.
+   */
+  function triggerPageTransition() {
+    handlePageTransition(
+      _options.onPageChange,
+      _options.autoFillOnChange,
+      _options.profile,
+      _options.portalType
+    );
   }
 
   /**
@@ -228,6 +337,36 @@ const OriginFillObserver = (() => {
         };
       }, 500);
     }
+  }
+
+  // ─── Profile Update Propagation ────────────────────────────────
+
+  /**
+   * Update the profile used by the observer.
+   * Called when the user switches active profile from the popup.
+   *
+   * @param {Object} newProfile - New active profile
+   */
+  function updateProfile(newProfile) {
+    _options.profile = newProfile;
+    OriginFillLogger.debug('Observer profile updated');
+  }
+
+  /**
+   * Update the portal type (e.g., after re-detection).
+   * @param {string} newPortalType
+   */
+  function updatePortalType(newPortalType) {
+    _options.portalType = newPortalType;
+    OriginFillLogger.debug(`Observer portal type updated: ${newPortalType}`);
+  }
+
+  /**
+   * Update auto-fill settings.
+   * @param {boolean} autoFill
+   */
+  function setAutoFillOnChange(autoFill) {
+    _options.autoFillOnChange = autoFill;
   }
 
   // ─── Page Detection ────────────────────────────────────────────
@@ -371,6 +510,11 @@ const OriginFillObserver = (() => {
     getTotalPages,
     countFormFields,
     getPageState,
-    getAllPageStates
+    getAllPageStates,
+
+    // Dynamic update methods
+    updateProfile,
+    updatePortalType,
+    setAutoFillOnChange
   });
 })();

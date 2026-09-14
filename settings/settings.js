@@ -22,24 +22,36 @@
 
   // ─── Initialize ────────────────────────────────────────────────
   async function init() {
-    applyTheme();
-    await OriginFillStore.initialize();
-    profiles = await OriginFillStore.getProfiles();
-    settings = await OriginFillStore.getSettings();
-    activeProfile = profiles.find(p => p.id === settings.activeProfileId) || profiles[0] || null;
+    try {
+      // Initialize UI first so the page is usable even if storage fails
+      applyTheme();
+      setupNavigation();
+      setupEventListeners();
 
-    renderProfiles();
-    if (activeProfile) loadProfileData(activeProfile);
-    loadExtensionSettings();
-    setupEventListeners();
-    setupNavigation();
+      // Initialize storage
+      await OriginFillStore.initialize();
+      profiles = await OriginFillStore.getProfiles();
+      settings = await OriginFillStore.getSettings();
+      activeProfile = profiles.find(p => p.id === settings.activeProfileId) || profiles[0] || null;
 
-    // Set version
-    $('versionText').textContent = `v${chrome.runtime.getManifest().version}`;
-    $('aboutVersion').textContent = `Version ${chrome.runtime.getManifest().version}`;
+      // Populate data
+      renderProfiles();
+      if (activeProfile) loadProfileData(activeProfile);
+      loadExtensionSettings();
 
-    // Mark first run as complete
-    await OriginFillStore.completeFirstRun();
+      // Set version
+      $('versionText').textContent = `v${chrome.runtime.getManifest().version}`;
+      $('aboutVersion').textContent = `Version ${chrome.runtime.getManifest().version}`;
+
+      // Mark first run as complete
+      await OriginFillStore.completeFirstRun();
+    } catch (error) {
+      console.error('[OriginFill][Settings] Initialization failed:', error);
+      
+      // Ensure basic UI is visible if everything crashed
+      $('versionText').textContent = `v${chrome.runtime.getManifest().version}`;
+      showToast('❌', 'Failed to load settings data. See console.');
+    }
   }
 
   // ─── Navigation ────────────────────────────────────────────────
@@ -172,7 +184,8 @@
     setVal('personalCountry', p.country);
     setVal('personalLinkedIn', p.linkedIn);
     setVal('personalGithub', p.github);
-    setVal('personalPortfolio', p.portfolio);
+    setVal('personalPortfolio', p.portfolio || (p.websites && p.websites.length > 0 ? p.websites[0] : ''));
+    setVal('personalWebsites', (p.websites || []).join('\n') || (p.portfolio ? p.portfolio : ''));
 
     // Skills
     setVal('skillsInput', (profile.skills || []).join(', '));
@@ -529,9 +542,11 @@
         country: $('personalCountry').value,
         linkedIn: $('personalLinkedIn').value,
         github: $('personalGithub').value,
-        portfolio: $('personalPortfolio').value
+        portfolio: $('personalPortfolio').value,
+        websites: $('personalWebsites').value.split('\n').map(s => s.trim()).filter(Boolean)
       };
-      await OriginFillStore.updateProfile(activeProfile.id, { personal });
+      await OriginFillStore.updateProfile(activeProfile.id, { personal, websites: $('personalWebsites').value.split('\n').map(s => s.trim()).filter(Boolean) });
+
       profiles = await OriginFillStore.getProfiles();
       activeProfile = profiles.find(p => p.id === activeProfile.id);
       showToast('✅', 'Personal info saved');
@@ -540,9 +555,21 @@
     // Save skills
     $('saveSkillsBtn').addEventListener('click', async () => {
       if (!activeProfile) return;
-      const skills = $('skillsInput').value.split(',').map(s => s.trim()).filter(Boolean);
-      const languages = $('languagesInput').value.split(',').map(s => s.trim()).filter(Boolean);
-      const certifications = $('certificationsInput').value.split(',').map(s => s.trim()).filter(Boolean);
+      
+      const normalizeInput = (raw) => {
+        if (!raw) return [];
+        // 1. Replace newlines with commas to avoid concatenating lines
+        // 2. Replace colons (categories) with commas
+        let text = raw.replace(/[\n\r]+/g, ',').replace(/:\s*/g, ',');
+        return text.split(',')
+          .map(s => s.trim().replace(/\.+$/, '').trim())
+          .filter(Boolean);
+      };
+
+      const skills = normalizeInput($('skillsInput').value);
+      const languages = normalizeInput($('languagesInput').value);
+      const certifications = normalizeInput($('certificationsInput').value);
+      
       await OriginFillStore.updateProfile(activeProfile.id, { skills, languages, certifications });
       profiles = await OriginFillStore.getProfiles();
       activeProfile = profiles.find(p => p.id === activeProfile.id);

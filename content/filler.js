@@ -64,17 +64,50 @@ const OriginFillFiller = (() => {
     });
 
     try {
-      // Get fields based on portal type
-      const fields = getFieldsForPortal(portalType, section);
+      // Get fields with bounded retry logic
+      const fields = await waitForFillableFields(portalType, section);
 
       if (fields.length === 0) {
-        const report = generateReport([], portalType);
-        OriginFillLogger.warn('No fillable fields found');
+        OriginFillLogger.warn('No fillable fields found after wait');
         _filling = false;
-        onComplete(report);
-        sendMessage(OriginFillMessages.FILL_COMPLETE, report);
-        return report;
+        
+        // Log "Detected Fields" diagnostic snapshot in dev mode
+        if (typeof ORIGINFILL_DEV_MODE !== 'undefined' && ORIGINFILL_DEV_MODE) {
+          logDiagnosticSnapshot();
+        }
+
+        const errorReport = {
+          success: false,
+          status: 'no_fields',
+          portalType,
+          totalFields: 0,
+          successCount: 0,
+          attentionCount: 0,
+          failedCount: 0,
+          skippedCount: 0,
+          error: 'No fillable fields were detected on the current application page.'
+        };
+        
+        onComplete(errorReport);
+        sendMessage(OriginFillMessages.FILL_ERROR, errorReport);
+        return errorReport;
       }
+
+      // ─── Diagnostic Logging ───
+      const domInputs = document.querySelectorAll('input:not([type="hidden"]), select, textarea, [contenteditable="true"], [role="combobox"]').length;
+      const exactMatches = fields.filter(f => f.source === 'workday-exact' || f.source === 'exact').length;
+      const genericMatches = fields.filter(f => f.source === 'generic-fallback' || f.source === 'generic').length;
+      
+      const detectionInfo = OriginFillDetector.getLastDetection();
+      
+      OriginFillLogger.info(`[OriginFill][Filler]
+Portal: ${portalType}
+Page: ${detectionInfo ? detectionInfo.pageName : 'Unknown'}
+URL: ${window.location.href}
+DOM input count: ${domInputs}
+Exact mapped field count: ${exactMatches}
+Generic fallback field count: ${genericMatches}
+Final fillable field count: ${fields.length}`);
 
       OriginFillLogger.info(`Found ${fields.length} fields to fill`);
 
@@ -86,7 +119,6 @@ const OriginFillFiller = (() => {
         }
 
         const field = fields[i];
-        const value = OriginFillFieldMapper.resolveProfilePath(profile, field.profilePath);
         const label = field.label || field.automationId || field.fieldType;
 
         // Report progress
@@ -99,13 +131,78 @@ const OriginFillFiller = (() => {
           section
         });
 
+        // ─── Sensitive field check ───
+        const sensitiveCheck = OriginFillFieldMapper.isSensitiveField(field.element);
+        if (sensitiveCheck.isSensitive) {
+          _currentResults.push({
+            field: label,
+            fieldType: field.fieldType,
+            status: OriginFillStatus.SKIPPED,
+            value: '—',
+            note: sensitiveCheck.reason
+          });
+          continue;
+        }
+
+        // ─── Confidence gating ───
+        const confidenceScore = OriginFillFieldMapper.getConfidenceScore(field.confidence || 'high');
+        if (confidenceScore < OriginFillConfidenceThresholds.SKIP) {
+          _currentResults.push({
+            field: label,
+            fieldType: field.fieldType,
+            status: OriginFillStatus.SKIPPED,
+            value: '—',
+            note: `Confidence too low (${Math.round(confidenceScore * 100)}%) — skipped`
+          });
+          continue;
+        }
+
+        // ─── Resume upload (special handling) ───
+        if (field.inputType === OriginFillFieldTypes.FILE ||
+            field.profilePath === 'resume') {
+          const resumeResult = await handleResumeUpload(field, profile);
+          _currentResults.push({
+            field: label,
+            fieldType: 'resume',
+            status: resumeResult.success ? OriginFillStatus.SUCCESS : OriginFillStatus.ATTENTION,
+            value: resumeResult.fileName || '—',
+            note: resumeResult.note
+          });
+          continue;
+        }
+
+        // ─── Resolve profile value ───
+        const value = OriginFillFieldMapper.resolveProfilePath(profile, field.profilePath);
+        
+        // Handle no value gracefully instead of failing
+        if (value === undefined || value === null || value === '') {
+          _currentResults.push({
+            field: label,
+            fieldType: field.fieldType,
+            status: OriginFillStatus.SKIPPED,
+            value: '—',
+            note: 'No value in profile'
+          });
+          continue;
+        }
+
         // Fill the field
         const result = await fillSingleField(field, value, portalType);
+
+        // Determine final status based on confidence
+        let finalStatus = result.status;
+        if (result.status === OriginFillStatus.SUCCESS &&
+            confidenceScore < OriginFillConfidenceThresholds.AUTO_FILL &&
+            confidenceScore >= OriginFillConfidenceThresholds.FLAG_REVIEW) {
+          finalStatus = OriginFillStatus.ATTENTION;
+          result.note = (result.note ? result.note + '; ' : '') +
+            `Medium confidence (${Math.round(confidenceScore * 100)}%) — please verify`;
+        }
 
         _currentResults.push({
           field: label,
           fieldType: field.fieldType,
-          status: result.status,
+          status: finalStatus,
           value: maskSensitiveValue(value, field.fieldType),
           note: result.note
         });
@@ -204,10 +301,54 @@ const OriginFillFiller = (() => {
     return allFields;
   }
 
+  /**
+   * Wait for fillable fields to appear, with bounded retries.
+   * Helps with SPAs and asynchronous form loading.
+   * 
+   * @param {string} portalType
+   * @param {string} section
+   * @returns {Promise<Array>}
+   */
+  async function waitForFillableFields(portalType, section) {
+    const retryDelays = [0, 300, 700, 1500];
+    
+    for (const waitTime of retryDelays) {
+      if (waitTime > 0) await delay(waitTime);
+      
+      const fields = getFieldsForPortal(portalType, section);
+      if (fields && fields.length > 0) {
+        return fields;
+      }
+    }
+    
+    return [];
+  }
+
+  /**
+   * Log a diagnostic snapshot of inputs when no fields are found.
+   */
+  function logDiagnosticSnapshot() {
+    const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]), select, textarea');
+    OriginFillLogger.debug(`\n--- DIAGNOSTIC SNAPSHOT ---`);
+    OriginFillLogger.debug(`Inputs found: ${inputs.length}`);
+    OriginFillLogger.debug(`Examples:`);
+    
+    Array.from(inputs).slice(0, 10).forEach((input, idx) => {
+      OriginFillLogger.debug(`
+${idx + 1}. tag=${input.tagName}
+   type=${input.type || 'N/A'}
+   name=${input.name || 'N/A'}
+   id=${input.id || 'N/A'}
+   automationId=${input.getAttribute('data-automation-id') || 'N/A'}
+   label=${OriginFillDetector.getInputLabel(input) || 'N/A'}`);
+    });
+    OriginFillLogger.debug(`---------------------------\n`);
+  }
+
   // ─── Single Field Fill ─────────────────────────────────────────
 
   /**
-   * Fill a single field with retry logic.
+   * Fill a single field with retry logic and post-fill verification.
    *
    * @param {Object} field - Field descriptor
    * @param {any} value - Value to fill
@@ -249,18 +390,27 @@ const OriginFillFiller = (() => {
         }
 
         if (result.success) {
-          // Check if there are validation errors after fill
-          const hasError = await checkFieldValidation(field.element);
+          // Post-fill verification
+          const verified = await verifyFieldValue(field.element, value, field.inputType);
 
-          if (hasError && attempt < OriginFillTiming.FIELD_RETRY_MAX - 1) {
-            OriginFillLogger.debug(`Retry ${attempt + 1}: validation error on ${field.fieldType}`);
-            await delay(OriginFillTiming.VALIDATION_WAIT);
+          if (!verified && attempt < OriginFillTiming.FIELD_RETRY_MAX - 1) {
+            OriginFillLogger.debug(`Retry ${attempt + 1}: verification failed on ${field.fieldType}`);
+            await delay(OriginFillTiming.FIELD_RETRY_DELAY);
             continue;
           }
 
+          // Check if there are validation errors after fill
+          const hasError = await checkFieldValidation(field.element);
+
           return {
-            status: result.note ? OriginFillStatus.ATTENTION : OriginFillStatus.SUCCESS,
-            note: result.note + (hasError ? ' (validation warning)' : '')
+            status: (result.note || hasError || !verified)
+              ? OriginFillStatus.ATTENTION
+              : OriginFillStatus.SUCCESS,
+            note: [
+              result.note,
+              hasError ? 'validation warning' : '',
+              !verified ? 'value may not have persisted' : ''
+            ].filter(Boolean).join('; ')
           };
         }
 
@@ -281,6 +431,63 @@ const OriginFillFiller = (() => {
       status: OriginFillStatus.FAILED,
       note: lastResult?.note || 'Unknown error'
     };
+  }
+
+  // ─── Post-Fill Verification ────────────────────────────────────
+
+  async function verifyFieldValue(element, expectedValue, inputType) {
+    await delay(50); // Brief wait for value to settle
+
+    switch (inputType) {
+      case OriginFillFieldTypes.CHECKBOX: {
+        const expected = expectedValue === true || expectedValue === 'true' || expectedValue === 'yes' || expectedValue === 'Yes';
+        if (element.getAttribute('role') === 'checkbox') {
+          return (element.getAttribute('aria-checked') === 'true') === expected;
+        }
+        return element.checked === expected;
+      }
+
+      case OriginFillFieldTypes.RADIO: {
+        // Check if any radio in the group is now selected
+        if (element.getAttribute('role') === 'radio') {
+          return element.getAttribute('aria-checked') === 'true';
+        }
+        return element.checked === true;
+      }
+
+      case OriginFillFieldTypes.SELECT: {
+        const selectedText = element.options?.[element.selectedIndex]?.textContent?.trim() || '';
+        const selectedValue = element.value || '';
+        const expected = String(expectedValue).toLowerCase();
+        return selectedText.toLowerCase().includes(expected) ||
+               selectedValue.toLowerCase().includes(expected) ||
+               expected.includes(selectedText.toLowerCase());
+      }
+
+      case OriginFillFieldTypes.FILE: {
+        return element.files && element.files.length > 0;
+      }
+
+      case OriginFillFieldTypes.RICHTEXT: {
+        return element.textContent.trim().length > 0;
+      }
+
+      case OriginFillFieldTypes.COMBOBOX:
+      case 'WORKDAY_SINGLE_SELECT':
+      case 'WORKDAY_MULTI_SELECT':
+      case 'WORKDAY_REPEATING_SECTION': {
+        // Complex interactions verify internally during the fill process
+        return true;
+      }
+
+      default: {
+        // Text-based inputs
+        const current = element.value || '';
+        const expected = String(expectedValue);
+        // Exact match or reasonable substring (controlled inputs may transform)
+        return current === expected || current.length > 0;
+      }
+    }
   }
 
   // ─── Validation Check ─────────────────────────────────────────
@@ -323,6 +530,121 @@ const OriginFillFiller = (() => {
     return false;
   }
 
+  // ─── Resume Upload ─────────────────────────────────────────────
+
+  /**
+   * Handle resume upload within the fill flow.
+   * Retrieves resume from IndexedDB and uploads to the file input.
+   *
+   * @param {Object} field - Field descriptor with element
+   * @param {Object} profile - Active profile
+   * @returns {Promise<{ success: boolean, note: string, fileName: string }>}
+   */
+  async function handleResumeUpload(field, profile) {
+    try {
+      // Find the file input element
+      let fileInput = field.element;
+      if (fileInput.tagName !== 'INPUT' || fileInput.type !== 'file') {
+        // Try to find a file input within or near the element
+        fileInput = field.element.querySelector('input[type="file"]')
+          || field.element.closest('[data-automation-id]')?.querySelector('input[type="file"]');
+      }
+
+      if (!fileInput || fileInput.type !== 'file') {
+        return { success: false, note: 'No file input found', fileName: '' };
+      }
+
+      // Retrieve resumes from IndexedDB
+      if (typeof OriginFillStore === 'undefined' || !OriginFillStore.getResumes) {
+        return { success: false, note: 'Resume storage not available', fileName: '' };
+      }
+
+      const resumes = await OriginFillStore.getResumes(profile.id);
+
+      if (!resumes || resumes.length === 0) {
+        return {
+          success: false,
+          note: 'No resume uploaded — please upload manually',
+          fileName: ''
+        };
+      }
+
+      // Use the first resume (future: allow user to select via settings)
+      const resume = resumes[0];
+
+      // Perform the upload
+      const result = await uploadResume(fileInput, resume);
+
+      return {
+        success: result.success,
+        note: result.note,
+        fileName: resume.fileName || resume.label || ''
+      };
+
+    } catch (err) {
+      OriginFillLogger.error('Resume upload failed:', err);
+      return { success: false, note: err.message, fileName: '' };
+    }
+  }
+
+  /**
+   * Upload a resume file from stored base64 data.
+   *
+   * @param {HTMLInputElement} fileInput - File input element
+   * @param {{ fileName: string, fileData: string }} resumeData - Resume from IndexedDB
+   * @returns {Promise<{ success: boolean, note: string }>}
+   */
+  async function uploadResume(fileInput, resumeData) {
+    if (!resumeData || !resumeData.fileData) {
+      return { success: false, note: 'No resume data' };
+    }
+
+    try {
+      // Decode base64 to binary
+      const binaryStr = atob(resumeData.fileData);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+
+      // Determine MIME type
+      const mimeType = resumeData.fileName.endsWith('.pdf')
+        ? 'application/pdf'
+        : resumeData.fileName.endsWith('.docx')
+          ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+          : resumeData.fileName.endsWith('.doc')
+            ? 'application/msword'
+            : 'application/octet-stream';
+
+      // Create File object
+      const file = new File([bytes], resumeData.fileName, { type: mimeType });
+
+      // Create DataTransfer and assign to input
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      fileInput.files = dt.files;
+
+      // Dispatch change event
+      fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+      fileInput.dispatchEvent(new Event('input', { bubbles: true }));
+
+      // Wait for upload processing
+      await delay(500);
+
+      // Verify the file was assigned
+      if (fileInput.files && fileInput.files.length > 0) {
+        OriginFillLogger.success(`Resume uploaded: ${resumeData.fileName}`);
+        return { success: true, note: '' };
+      }
+
+      return { success: false, note: 'File not attached after upload attempt' };
+
+    } catch (err) {
+      OriginFillLogger.error('Resume upload failed:', err);
+      return { success: false, note: err.message };
+    }
+  }
+
   // ─── Fill Report ───────────────────────────────────────────────
 
   /**
@@ -340,19 +662,21 @@ const OriginFillFiller = (() => {
     const failedCount = results.filter(r => r.status === OriginFillStatus.FAILED).length;
     const skippedCount = results.filter(r => r.status === OriginFillStatus.SKIPPED).length;
 
-    const totalAttempted = results.length - skippedCount;
-    const successRate = totalAttempted > 0
-      ? Math.round(((successCount + attentionCount) / totalAttempted) * 100)
+    const totalAttempted = results.length; // all processed fields in the report
+    const successRate = (successCount + failedCount) > 0
+      ? Math.round((successCount / (successCount + failedCount)) * 100)
       : 0;
 
     return {
-      success: failedCount === 0,
+      success: failedCount === 0 && successCount > 0,
       portalType,
       portalName: OriginFillDetector.getPortalDisplayName(portalType),
       url: window.location.href,
       timestamp: new Date().toISOString(),
       elapsed: Math.round(elapsed),
       elapsedFormatted: formatDuration(elapsed),
+      detectedFields: results.length, // total fields discovered
+      attemptedFields: successCount + attentionCount + failedCount,
       totalFields: results.length,
       successCount,
       attentionCount,
@@ -410,17 +734,42 @@ const OriginFillFiller = (() => {
    * Restore fields from a session snapshot.
    *
    * @param {Object} snapshot - Field snapshot from captureFieldSnapshot()
-   * @returns {Promise<{ restored: number, failed: number }>}
+   * @param {string} portalType - Detected portal type to select adapter
+   * @returns {Promise<Object>} Detailed restore report
    */
-  async function restoreFromSnapshot(snapshot) {
+  async function restoreFromSnapshot(snapshot, portalType) {
     if (!snapshot || Object.keys(snapshot).length === 0) {
-      return { restored: 0, failed: 0 };
+      return { success: false, restored: 0, failed: 0, skipped: 0, total: 0, results: [] };
     }
 
+    const adapter = (portalType === OriginFillPortals.WORKDAY && typeof OriginFillWorkday !== 'undefined')
+      ? OriginFillWorkday
+      : OriginFillGeneric;
+
+    const fields = Object.entries(snapshot);
+    const total = fields.length;
     let restored = 0;
     let failed = 0;
+    const results = [];
 
-    for (const [key, fieldData] of Object.entries(snapshot)) {
+    OriginFillLogger.info(`Starting restore of ${total} fields using ${portalType} adapter`);
+
+    for (let i = 0; i < total; i++) {
+      const [key, fieldData] = fields[i];
+      let success = false;
+      let note = '';
+      const label = fieldData.label || key;
+      let fieldStatus = OriginFillStatus.FAILED;
+
+      // Report progress
+      sendMessage(OriginFillMessages.FILL_PROGRESS, {
+        phase: 'restore',
+        current: i + 1,
+        total: total,
+        fieldName: label,
+        section: 'recovery'
+      });
+
       try {
         // Find the field by key
         let element = document.getElementById(key)
@@ -437,80 +786,54 @@ const OriginFillFiller = (() => {
 
         if (element && OriginFillDetector.isVisible(element)) {
           const inputType = OriginFillFieldMapper.getInputType(element);
-          const result = await OriginFillWorkday.fillField(
+          
+          const result = await adapter.fillField(
             element, fieldData.value, inputType
           );
 
           if (result.success) {
-            restored++;
+            const verified = await verifyFieldValue(element, fieldData.value, inputType);
+            if (verified) {
+              success = true;
+              fieldStatus = OriginFillStatus.SUCCESS;
+            } else {
+              note = 'Verification failed after fill';
+            }
           } else {
-            failed++;
+            note = result.note || 'Fill failed';
           }
         } else {
-          failed++;
+          note = 'Field not found or not visible';
         }
       } catch (err) {
-        failed++;
+        note = err.message;
         OriginFillLogger.debug(`Restore failed for ${key}:`, err.message);
       }
+
+      if (success) restored++;
+      else failed++;
+
+      results.push({
+        field: label,
+        fieldType: fieldData.type,
+        status: fieldStatus,
+        value: maskSensitiveValue(fieldData.value, fieldData.type),
+        note: note
+      });
 
       await delay(50); // Small delay between restores
     }
 
     OriginFillLogger.info(`Snapshot restored: ${restored} success, ${failed} failed`);
-    return { restored, failed };
-  }
-
-  // ─── Resume Upload ─────────────────────────────────────────────
-
-  /**
-   * Upload a resume file from stored base64 data.
-   *
-   * @param {HTMLInputElement} fileInput - File input element
-   * @param {{ fileName: string, fileData: string }} resumeData - Resume from IndexedDB
-   * @returns {Promise<{ success: boolean, note: string }>}
-   */
-  async function uploadResume(fileInput, resumeData) {
-    if (!resumeData || !resumeData.fileData) {
-      return { success: false, note: 'No resume data' };
-    }
-
-    try {
-      // Decode base64 to binary
-      const binaryStr = atob(resumeData.fileData);
-      const bytes = new Uint8Array(binaryStr.length);
-      for (let i = 0; i < binaryStr.length; i++) {
-        bytes[i] = binaryStr.charCodeAt(i);
-      }
-
-      // Determine MIME type
-      const mimeType = resumeData.fileName.endsWith('.pdf')
-        ? 'application/pdf'
-        : resumeData.fileName.endsWith('.docx')
-          ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-          : resumeData.fileName.endsWith('.doc')
-            ? 'application/msword'
-            : 'application/octet-stream';
-
-      // Create File object
-      const file = new File([bytes], resumeData.fileName, { type: mimeType });
-
-      // Create DataTransfer and assign to input
-      const dt = new DataTransfer();
-      dt.items.add(file);
-      fileInput.files = dt.files;
-
-      // Dispatch change event
-      fileInput.dispatchEvent(new Event('change', { bubbles: true }));
-      fileInput.dispatchEvent(new Event('input', { bubbles: true }));
-
-      OriginFillLogger.success(`Resume uploaded: ${resumeData.fileName}`);
-      return { success: true, note: '' };
-
-    } catch (err) {
-      OriginFillLogger.error('Resume upload failed:', err);
-      return { success: false, note: err.message };
-    }
+    return {
+      success: restored > 0,
+      partial: failed > 0,
+      restored,
+      failed,
+      skipped: 0,
+      total,
+      results
+    };
   }
 
   // ─── Control ───────────────────────────────────────────────────
@@ -617,6 +940,7 @@ const OriginFillFiller = (() => {
     generateReport,
     getFieldsForPortal,
     maskSensitiveValue,
-    formatDuration
+    formatDuration,
+    verifyFieldValue
   });
 })();

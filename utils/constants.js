@@ -4,6 +4,16 @@
  * @author CharyWorld
  */
 
+// ─── Runtime Bootstrap Marker ────────────────────────────────────
+// Sets an immediate lock when the first script loads to prevent race 
+// conditions during on-demand injection.
+if (typeof window !== 'undefined') {
+  window.__originfillRuntime = {
+    version: '1.0.0',
+    initialized: true
+  };
+}
+
 // ─── Portal Types ────────────────────────────────────────────────
 const OriginFillPortals = Object.freeze({
   WORKDAY: 'workday',
@@ -63,6 +73,7 @@ const OriginFillMessages = Object.freeze({
   // Detection
   GET_PORTAL_INFO: 'GET_PORTAL_INFO',
   PORTAL_DETECTED: 'PORTAL_DETECTED',
+  DETECT_ON_DEMAND: 'DETECT_ON_DEMAND',
 
   // Filling
   FILL_ALL: 'FILL_ALL',
@@ -119,10 +130,13 @@ const OriginFillDefaultProfile = Object.freeze({
   label: 'Default Profile',
   isDefault: true,
   colorTag: '#2563EB',
+  schemaVersion: 2,
   personal: {
     firstName: '',
+    middleName: '',
     lastName: '',
     fullName: '',
+    prefix: '',
     email: '',
     phone: '',
     address: '',
@@ -214,6 +228,40 @@ const OriginFillFuzzyConfig = Object.freeze({
   ]
 });
 
+// ─── Confidence Thresholds (numeric) ─────────────────────────────
+const OriginFillConfidenceThresholds = Object.freeze({
+  AUTO_FILL: 0.80,    // >= 80% confidence → safe automatic fill
+  FLAG_REVIEW: 0.60,  // 60-79% → fill but flag for review
+  SKIP: 0.40          // < 40% → do not fill
+});
+
+// ─── Confidence String → Numeric Map ─────────────────────────────
+const OriginFillConfidenceScores = Object.freeze({
+  exact: 1.00,
+  high: 0.95,
+  medium: 0.80,
+  low: 0.65,
+  none: 0.00
+});
+
+// ─── Sensitive Question Keywords ─────────────────────────────────
+// Fields matching these must NOT be auto-filled; flagged for user review
+const OriginFillSensitiveKeywords = Object.freeze([
+  'work authorization', 'authorized to work', 'legally authorized',
+  'sponsorship', 'visa sponsor', 'require sponsorship', 'need sponsorship',
+  'criminal', 'convicted', 'felony', 'misdemeanor', 'background check',
+  'disability', 'disabled', 'accommodation',
+  'veteran', 'military', 'armed forces', 'protected veteran',
+  'gender', 'sex', 'pronoun',
+  'race', 'ethnicity', 'ethnic', 'hispanic', 'latino',
+  'salary', 'compensation', 'pay expectation', 'desired salary', 'expected salary',
+  'relocate', 'relocation', 'willing to relocate',
+  'why do you want', 'why should we hire', 'tell us about yourself',
+  'cover letter', 'additional information',
+  'agree to terms', 'i agree', 'i certify', 'i acknowledge',
+  'years of experience'
+]);
+
 // ─── UI Constants ────────────────────────────────────────────────
 const OriginFillUI = Object.freeze({
   POPUP_WIDTH: 340,
@@ -246,7 +294,7 @@ const OriginFillIDB = Object.freeze({
 });
 
 // ─── Dev Mode ────────────────────────────────────────────────────
-const ORIGINFILL_DEV_MODE = true; // Set to false for production builds
+const ORIGINFILL_DEV_MODE = false; // Set to true for debug logging
 
 // ─── Average manual fill time (for stats calculation) ────────────
 const ORIGINFILL_AVG_MANUAL_FILL_MINUTES = 25;

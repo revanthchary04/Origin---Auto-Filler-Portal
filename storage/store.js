@@ -56,6 +56,12 @@ const OriginFillStore = (() => {
    * @returns {Promise<void>}
    */
   async function saveResume(profileId, resumeData) {
+    // Enforce resume count limit
+    const existing = await getResumes(profileId);
+    if (existing.length >= OriginFillUI.MAX_RESUME_COUNT) {
+      throw new Error(`Maximum ${OriginFillUI.MAX_RESUME_COUNT} resumes allowed per profile. Delete one first.`);
+    }
+
     const db = await openDB();
     return new Promise((resolve, reject) => {
       const tx = db.transaction(OriginFillIDB.STORE_RESUMES, 'readwrite');
@@ -246,10 +252,20 @@ const OriginFillStore = (() => {
       }
     } catch (e) {
       OriginFillLogger.warn('Encrypted save failed, falling back to plain:', e);
+      // Only fall back to plain storage if encryption is completely unavailable
+      await chrome.storage.local.set({ [OriginFillStorageKeys.PROFILES]: profiles });
     }
 
-    // Also mirror to plain 'profiles' key for compatibility and instant DevTools inspection
-    await chrome.storage.local.set({ profiles });
+    // Clean up legacy plaintext 'profiles' key if it exists
+    try {
+      const legacy = await chrome.storage.local.get('profiles');
+      if (legacy.profiles) {
+        await chrome.storage.local.remove('profiles');
+        OriginFillLogger.info('Legacy plaintext profiles key removed');
+      }
+    } catch (e) {
+      // Ignore cleanup errors
+    }
   }
 
   /**
@@ -422,7 +438,17 @@ const OriginFillStore = (() => {
    */
   async function saveSettings(settings) {
     await writePlain(OriginFillStorageKeys.SETTINGS, settings);
-    await writePlain('settings', settings);
+
+    // Clean up legacy plain 'settings' key if it exists
+    try {
+      const legacy = await chrome.storage.local.get('settings');
+      if (legacy.settings) {
+        await chrome.storage.local.remove('settings');
+        OriginFillLogger.info('Legacy plaintext settings key removed');
+      }
+    } catch (e) {
+      // Ignore cleanup errors
+    }
   }
 
   /**
@@ -691,6 +717,51 @@ const OriginFillStore = (() => {
     }
 
     return output;
+  }
+
+  // ─── Profile Schema Migration ──────────────────────────────────
+
+  /**
+   * Migrate a profile to the latest schema version.
+   * Adds missing fields with defaults, preserves all existing data.
+   *
+   * @param {Object} profile
+   * @returns {Object} Migrated profile
+   */
+  function migrateProfileSchema(profile) {
+    const currentVersion = profile.schemaVersion || 1;
+    if (currentVersion >= 2) return profile; // Already up to date
+
+    // Migration v1 → v2: Add new personal fields
+    if (!profile.personal) profile.personal = {};
+    if (!profile.personal.middleName) profile.personal.middleName = '';
+    if (!profile.personal.prefix) profile.personal.prefix = '';
+    if (!profile.personal.github) profile.personal.github = '';
+    if (!profile.personal.portfolio) profile.personal.portfolio = '';
+    if (!profile.personal.linkedIn) profile.personal.linkedIn = '';
+
+    // Ensure education array exists
+    if (!Array.isArray(profile.education)) {
+      profile.education = [{ institution: '', degree: '', fieldOfStudy: '', startYear: '', endYear: '', gpa: '', location: '' }];
+    }
+
+    // Ensure workExperience array exists
+    if (!Array.isArray(profile.workExperience)) {
+      profile.workExperience = [{ company: '', jobTitle: '', startDate: '', endDate: '', isCurrent: false, location: '', bullets: [''] }];
+    }
+
+    // Ensure resume object exists
+    if (!profile.resume) {
+      profile.resume = { fileName: '', fileData: '', uploadedAt: '' };
+    }
+
+    // Ensure arrays exist
+    if (!Array.isArray(profile.skills)) profile.skills = [];
+    if (!Array.isArray(profile.certifications)) profile.certifications = [];
+    if (!Array.isArray(profile.languages)) profile.languages = [];
+
+    profile.schemaVersion = 2;
+    return profile;
   }
 
   // ─── Public API ─────────────────────────────────────────────────

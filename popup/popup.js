@@ -34,6 +34,7 @@
     setupProfileBtn: $('setupProfileBtn'),
     // No Form
     goSettingsBtn: $('goSettingsBtn'),
+    detectDemandBtn: $('detectDemandBtn'),
     // Detected
     pageText: $('pageText'),
     pageIndicator: $('pageIndicator'),
@@ -232,8 +233,24 @@
     const age = Date.now() - new Date(recovery.savedAt).getTime();
     if (age > 24 * 60 * 60 * 1000) return null;
 
-    const fieldCount = Object.keys(recovery.savedFields).length;
+    const fieldCount = Object.keys(recovery.savedFields || {}).length;
     if (fieldCount === 0) return null;
+
+    // Validate domain
+    try {
+      const currentTab = await new Promise(resolve => {
+        chrome.tabs.query({ active: true, currentWindow: true }, tabs => resolve(tabs[0]));
+      });
+      if (currentTab && currentTab.url) {
+        const currentDomain = new URL(currentTab.url).hostname;
+        const recoveryDomain = new URL(recovery.lastUrl).hostname;
+        if (currentDomain !== recoveryDomain) {
+          return null; // Not matching
+        }
+      }
+    } catch(e) {
+      // url parse failed
+    }
 
     return recovery;
   }
@@ -281,19 +298,53 @@
     });
   }
 
-  /**
-   * Send a session restore command.
-   */
   async function sendRestoreCommand() {
     showState('filling');
     els.fillingField.textContent = 'Restoring saved data...';
+    els.progressFill.style.width = '0%';
+    els.progressText.textContent = '0%';
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab) return;
+    if (!tab) {
+      showError('Unable to connect to OriginFill on this page.\n\nTry refreshing the application page and opening OriginFill again.');
+      return;
+    }
 
-    chrome.tabs.sendMessage(tab.id, {
-      type: 'SESSION_RESTORE'
+    let responded = false;
+    const timeoutId = setTimeout(() => {
+      if (!responded) {
+        showError('Restore timed out. Some fields may not have been restored.');
+      }
+    }, 15000); // 15 seconds to at least start or fail
+
+    chrome.runtime.sendMessage({
+      type: 'SESSION_RESTORE',
+      tabId: tab.id
+    }, (response) => {
+      responded = true;
+      clearTimeout(timeoutId);
+      
+      if (chrome.runtime.lastError || !response || !response.success) {
+        showError('Unable to connect to OriginFill on this page.\n\nTry refreshing the application page and opening OriginFill again.');
+        return;
+      }
+      
+      // If success, we wait for FILL_PROGRESS and SESSION_RESTORED messages
     });
+  }
+
+  function showError(msg) {
+    showState('complete');
+    els.completeTime.textContent = '';
+    
+    els.statSuccess.textContent = '0';
+    els.statAttention.textContent = '0';
+    els.statFailed.textContent = '0';
+    
+    els.fillSummaryText.textContent = msg;
+    els.fillSummary.hidden = false;
+    els.viewFullReportBtn.hidden = true;
+    els.fillAgainBtn.textContent = 'Go Back';
   }
 
   // ─── Fill Progress & Complete ──────────────────────────────────
@@ -321,10 +372,23 @@
   function showFillComplete(report) {
     currentReport = report;
 
-    els.statSuccess.textContent = report.successCount;
-    els.statAttention.textContent = report.attentionCount;
-    els.statFailed.textContent = report.failedCount;
-    els.completeTime.textContent = `⏱ ${report.elapsedFormatted}`;
+    if (report.status === 'no_fields') {
+      showError(`No fields detected\n\nOriginFill detected ${getPortalDisplayName(report.portalType)}, but could not identify any fillable application fields on this page.\n\nRefresh the page or try again when the application form is loaded.`);
+      return;
+    }
+
+    if (report.totalFields > 0 && report.successCount === 0 && report.failedCount === 0 && report.attentionCount === 0 && report.skippedCount > 0) {
+      showError(`No profile data available\n\nFields were detected, but no matching data was found in your profile to fill them.`);
+      return;
+    }
+
+    els.statSuccess.textContent = report.successCount || 0;
+    els.statAttention.textContent = report.attentionCount || 0;
+    els.statFailed.textContent = report.failedCount || 0;
+    els.completeTime.textContent = `⏱ ${report.elapsedFormatted || ''}`;
+    
+    els.viewFullReportBtn.hidden = false;
+    els.fillSummary.hidden = true;
 
     showState('complete');
 
@@ -361,22 +425,22 @@
     let html = '';
 
     // Success section
-    if (report.successResults.length > 0) {
+    if (report.successResults && report.successResults.length > 0) {
       html += renderReportSection('✅ Filled Successfully', 'success', report.successResults);
     }
 
     // Attention section
-    if (report.attentionResults.length > 0) {
+    if (report.attentionResults && report.attentionResults.length > 0) {
       html += renderReportSection('⚠️ Needs Attention', 'attention', report.attentionResults);
     }
 
     // Failed section
-    if (report.failedResults.length > 0) {
+    if (report.failedResults && report.failedResults.length > 0) {
       html += renderReportSection('❌ Failed', 'failed', report.failedResults);
     }
 
     // Skipped section
-    if (report.skippedResults.length > 0) {
+    if (report.skippedResults && report.skippedResults.length > 0) {
       html += renderReportSection('⏭ Skipped', 'skipped', report.skippedResults);
     }
 
@@ -643,6 +707,40 @@
       updateFillButtonStates();
     }
   });
+
+  // Detect on demand
+  if (els.detectDemandBtn) {
+    els.detectDemandBtn.addEventListener('click', () => {
+      els.detectDemandBtn.disabled = true;
+      els.detectDemandBtn.innerHTML = '<span class="popup__btn-icon">⏳</span>Detecting...';
+      
+      chrome.runtime.sendMessage({ type: 'DETECT_ON_DEMAND' }, (response) => {
+        els.detectDemandBtn.disabled = false;
+        els.detectDemandBtn.innerHTML = '<span class="popup__btn-icon">🔍</span>Detect on this page';
+        
+        if (chrome.runtime.lastError) {
+          console.error('[OriginFill] Detection error:', chrome.runtime.lastError);
+          return;
+        }
+        
+        if (response && response.type && response.type !== 'none') {
+          currentPortalInfo = {
+            portalType: response.type,
+            confidence: response.confidence,
+            pageName: response.pageName,
+            url: response.url
+          };
+          showDetectedState(currentPortalInfo);
+        } else {
+          // Temporarily show a "not found" state on the button
+          els.detectDemandBtn.innerHTML = '<span class="popup__btn-icon">❌</span>No fields found';
+          setTimeout(() => {
+            els.detectDemandBtn.innerHTML = '<span class="popup__btn-icon">🔍</span>Detect on this page';
+          }, 3000);
+        }
+      });
+    });
+  }
 
   // Fill all
   els.fillAllBtn.addEventListener('click', () => sendFillCommand('all'));

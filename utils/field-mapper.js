@@ -30,7 +30,8 @@ const OriginFillFieldMapper = (() => {
     'zipCode':       'personal.zipCode',
     'linkedIn':      'personal.linkedIn',
     'github':        'personal.github',
-    'portfolio':     'personal.portfolio',
+    'portfolio':     'personal.portfolio', // Legacy/fallback single URL
+    'websites':      'websites',           // Repeating URL section
 
     // Education
     'institution':   'education[0].institution',
@@ -121,7 +122,7 @@ const OriginFillFieldMapper = (() => {
       negativeKeywords: []
     },
     {
-      fieldType: 'portfolio',
+      fieldType: 'websites', // Use repeating websites by default for portfolios
       keywords: ['portfolio', 'website', 'personal site', 'personal website', 'portfolio url'],
       negativeKeywords: ['company']
     },
@@ -457,6 +458,64 @@ const OriginFillFieldMapper = (() => {
     return results;
   }
 
+  // ─── Sensitive Question Detection ────────────────────────────
+
+  /**
+   * Check if a field is a sensitive application question that should NOT be auto-filled.
+   * Examples: work authorization, disability, veteran status, salary, criminal history.
+   *
+   * @param {HTMLElement} element
+   * @returns {{ isSensitive: boolean, reason: string }}
+   */
+  function isSensitiveField(element) {
+    if (!element) return { isSensitive: false, reason: '' };
+
+    const label = OriginFillDetector.getInputLabel(element).toLowerCase();
+    const placeholder = (element.placeholder || '').toLowerCase();
+    const name = (element.name || '').toLowerCase();
+    const id = (element.id || '').toLowerCase();
+    const ariaLabel = (element.getAttribute('aria-label') || '').toLowerCase();
+    const automationId = (element.getAttribute('data-automation-id') || '').toLowerCase();
+
+    const combined = `${label} ${placeholder} ${name} ${id} ${ariaLabel} ${automationId}`;
+
+    // Check Workday explicitly-skipped sensitive fields
+    const sensitiveAutomationIds = [
+      'veteranstatus', 'disabilitystatus', 'ethnicitydropdown',
+      'genderdropdown', 'racedropdown'
+    ];
+    if (sensitiveAutomationIds.some(sid => automationId.includes(sid))) {
+      return { isSensitive: true, reason: 'Voluntary self-identification — requires your review' };
+    }
+
+    for (const keyword of OriginFillSensitiveKeywords) {
+      if (combined.includes(keyword)) {
+        return { isSensitive: true, reason: `Sensitive field ("${keyword}") — requires your review` };
+      }
+    }
+
+    // Check for free-text textarea questions that could be application questions
+    if (element.tagName === 'TEXTAREA') {
+      const questionWords = ['why', 'describe', 'explain', 'tell us', 'what makes'];
+      if (questionWords.some(w => combined.includes(w))) {
+        return { isSensitive: true, reason: 'Open-ended question — requires your review' };
+      }
+    }
+
+    return { isSensitive: false, reason: '' };
+  }
+
+  // ─── Confidence Score Utilities ───────────────────────────────
+
+  /**
+   * Convert a string confidence level to a numeric score.
+   * @param {string} confidenceString - 'exact', 'high', 'medium', 'low', 'none'
+   * @returns {number} Score between 0.0 and 1.0
+   */
+  function getConfidenceScore(confidenceString) {
+    return OriginFillConfidenceScores[confidenceString] || 0.0;
+  }
+
   // ─── Public API ─────────────────────────────────────────────────
   return Object.freeze({
     detectFieldType,
@@ -465,6 +524,8 @@ const OriginFillFieldMapper = (() => {
     resolveProfilePath,
     getFieldValue,
     scanPageFields,
+    isSensitiveField,
+    getConfidenceScore,
     FIELD_TO_PROFILE,
     DETECTION_RULES
   });

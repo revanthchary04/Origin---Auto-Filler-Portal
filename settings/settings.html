@@ -136,15 +136,15 @@
             <input class="settings__input" type="url" id="personalLinkedIn" placeholder="https://linkedin.com/in/johndoe">
           </div>
 
-          <div class="settings__row settings__row--2col">
             <div class="settings__field">
               <label class="settings__label" for="personalGithub">GitHub URL</label>
               <input class="settings__input" type="url" id="personalGithub" placeholder="https://github.com/johndoe">
             </div>
-            <div class="settings__field">
-              <label class="settings__label" for="personalPortfolio">Portfolio / Website</label>
-              <input class="settings__input" type="url" id="personalPortfolio" placeholder="https://johndoe.dev">
-            </div>
+          
+          <div class="settings__field">
+            <label class="settings__label" for="personalWebsites">Portfolios / Websites <span class="settings__label-hint">(one per line)</span></label>
+            <textarea class="settings__textarea" id="personalWebsites" rows="2" placeholder="https://johndoe.dev&#10;https://blog.johndoe.dev"></textarea>
+            <input type="hidden" id="personalPortfolio">
           </div>
         </div>
 
